@@ -309,4 +309,98 @@ mod tests {
         let result = RespValue::parse(input);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_serialize_simple_string() {
+        let value = RespValue::SimpleString("OK".to_string());
+        assert_eq!(value.serialize(), b"+OK\r\n");
+    }
+
+    #[test]
+    fn test_serialize_error() {
+        let value = RespValue::Error("ERR unknown command".to_string());
+        assert_eq!(value.serialize(), b"-ERR unknown command\r\n");
+    }
+
+    #[test]
+    fn test_serialize_integer_positive() {
+        let value = RespValue::Integer(1000);
+        assert_eq!(value.serialize(), b":1000\r\n");
+    }
+
+    #[test]
+    fn test_serialize_integer_zero() {
+        let value = RespValue::Integer(0);
+        assert_eq!(value.serialize(), b":0\r\n");
+    }
+
+    #[test]
+    fn test_serialize_integer_negative() {
+        let value = RespValue::Integer(-42);
+        assert_eq!(value.serialize(), b":-42\r\n");
+    }
+
+    #[test]
+    fn test_serialize_bulk_string() {
+        let value = RespValue::BulkString(Some("hello".to_string()));
+        assert_eq!(value.serialize(), b"$5\r\nhello\r\n");
+    }
+
+    #[test]
+    fn test_serialize_bulk_string_empty() {
+        let value = RespValue::BulkString(Some("".to_string()));
+        assert_eq!(value.serialize(), b"$0\r\n\r\n");
+    }
+
+    #[test]
+    fn test_serialize_bulk_string_null() {
+        let value = RespValue::BulkString(None);
+        assert_eq!(value.serialize(), b"$-1\r\n");
+    }
+
+    #[test]
+    fn test_serialize_array() {
+        let value = RespValue::Array(Some(vec![
+            RespValue::BulkString(Some("foo".to_string())),
+            RespValue::BulkString(Some("bar".to_string())),
+        ]));
+        assert_eq!(value.serialize(), b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n");
+    }
+
+    #[test]
+    fn test_serialize_array_empty() {
+        let value = RespValue::Array(Some(vec![]));
+        assert_eq!(value.serialize(), b"*0\r\n");
+    }
+
+    #[test]
+    fn test_serialize_array_null() {
+        let value = RespValue::Array(None);
+        assert_eq!(value.serialize(), b"*-1\r\n");
+    }
+
+    #[test]
+    fn test_serialize_array_mixed_types() {
+        let value = RespValue::Array(Some(vec![
+            RespValue::Integer(1),
+            RespValue::SimpleString("OK".to_string()),
+            RespValue::BulkString(None),
+        ]));
+        assert_eq!(
+            value.serialize(),
+            b"*3\r\n:1\r\n+OK\r\n$-1\r\n"
+        );
+    }
+
+    #[test]
+    fn test_serialize_nested_array() {
+        let value = RespValue::Array(Some(vec![
+            RespValue::Array(Some(vec![RespValue::Integer(1)])),
+            RespValue::SimpleString("OK".to_string()),
+        ]));
+        assert_eq!(
+            value.serialize(),
+            b"*2\r\n*1\r\n:1\r\n+OK\r\n"
+        );
+    }
 }
