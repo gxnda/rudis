@@ -5,7 +5,7 @@
 
 use std::slice::Iter;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RespValue {
     SimpleString(String),
     BulkString(String),
@@ -40,14 +40,13 @@ impl RespValue {
     }
     fn parse_int(chars: &mut Iter<u8>) -> Result<Option<i64>, &'static str> {
         let s: String = Self::parse_str(chars)?;
+        println!("{:?}", s);
         if s.parse::<i64>().is_ok() {
             let i: i64 = s.parse::<i64>().unwrap();
             if i == -1 {
                 Ok(None) // Null value
-            } else if i >= 0 {
-                Ok(Some(i))
             } else {
-                Err("Invalid integer")
+                Ok(Some(i))
             }
         } else { Err("Invalid integer") }
     }
@@ -55,6 +54,7 @@ impl RespValue {
     fn parse_bulk_string(chars: &mut Iter<u8>) -> Result<Option<String>, &'static str> {
         let len = match Self::parse_int(chars)? {
             Some(-1) => return Ok(None),
+            None => return Ok(None),
             Some(l) if l >= 0 => l as usize,
             _ => return Err("Invalid bulk string length"),
         };
@@ -81,8 +81,9 @@ impl RespValue {
         let size = match Self::parse_int(chars)? {
             Some(-1) => return Ok(None),
             Some(0) => return Ok(Some(Vec::new())),
+            None => return Ok(None),
             Some(l) if l >= 0 => l as usize,
-            _ => return Err("Invalid bulk string length"),
+            _ => return Err("Invalid array length"),
         };
         let mut array: Vec<RespValue> = Vec::with_capacity(size);
         for _ in 0..size {
