@@ -151,3 +151,168 @@ impl RespValue {
     }
 
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_string() {
+        let input = b"+OK\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn test_error() {
+        let input = b"-ERR unknown command\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Error("ERR unknown command".to_string()));
+    }
+
+    #[test]
+    fn test_integer() {
+        let input = b":1000\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Integer(1000));
+    }
+
+    #[test]
+    fn test_integer_zero() {
+        let input = b":0\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Integer(0));
+    }
+
+    #[test]
+    fn test_integer_negative() {
+        let input = b":-42\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Integer(-42));
+    }
+
+    #[test]
+    fn test_bulk_string() {
+        let input = b"$5\r\nhello\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::BulkString("hello".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_string_empty() {
+        let input = b"$0\r\n\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::BulkString("".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_string_null() {
+        let input = b"$-1\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Null);
+    }
+
+    #[test]
+    fn test_array() {
+        let input = b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(
+            result,
+            RespValue::Array(vec![
+                RespValue::BulkString("foo".to_string()),
+                RespValue::BulkString("bar".to_string())
+            ])
+        );
+    }
+
+    #[test]
+    fn test_array_empty() {
+        let input = b"*0\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Array(vec![]));
+    }
+
+    #[test]
+    fn test_array_null() {
+        let input = b"*-1\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(result, RespValue::Null);
+    }
+
+    #[test]
+    fn test_array_mixed_types() {
+        let input = b"*3\r\n:1\r\n+OK\r\n$-1\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(
+            result,
+            RespValue::Array(vec![
+                RespValue::Integer(1),
+                RespValue::SimpleString("OK".to_string()),
+                RespValue::Null
+            ])
+        );
+    }
+
+    #[test]
+    fn test_nested_array() {
+        let input = b"*2\r\n*1\r\n:1\r\n+OK\r\n";
+        let result = RespValue::parse(input).unwrap();
+        assert_eq!(
+            result,
+            RespValue::Array(vec![
+                RespValue::Array(vec![RespValue::Integer(1)]),
+                RespValue::SimpleString("OK".to_string())
+            ])
+        );
+    }
+
+    #[test]
+    fn test_invalid_start_byte() {
+        let input = b"xinvalid\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_incomplete_simple_string() {
+        let input = b"+OK";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_bulk_string_length() {
+        let input = b"$abc\r\nhello\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_negative_bulk_string_length() {
+        let input = b"$-2\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_array_length() {
+        let input = b"*abc\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_negative_array_length() {
+        let input = b"*-2\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_incomplete_array() {
+        let input = b"*2\r\n:1\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_err());
+    }
+}
