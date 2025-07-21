@@ -3,8 +3,8 @@ use std::slice::Iter;
 #[derive(Debug, PartialEq)]
 pub enum RespValue {
     SimpleString(String),
-    BulkString(Option<String>),  // Use Option for bulk strings
-    Array(Option<Vec<RespValue>>),  // Use Option for arrays
+    BulkString(Option<String>),    // Use Option for bulk strings
+    Array(Option<Vec<RespValue>>), // Use Option for arrays
     Integer(i64),
     Error(String),
 }
@@ -31,7 +31,7 @@ impl RespValue {
 
     fn parse_bulk_string(chars: &mut Iter<u8>) -> Result<Option<String>, &'static str> {
         let len = match Self::parse_int(chars)? {
-            -1 => return Ok(None),  // Null bulk string
+            -1 => return Ok(None), // Null bulk string
             len if len >= 0 => len as usize,
             _ => return Err("Invalid bulk string length"),
         };
@@ -51,7 +51,7 @@ impl RespValue {
 
     fn parse_array(chars: &mut Iter<u8>) -> Result<Option<Vec<RespValue>>, &'static str> {
         let len = match Self::parse_int(chars)? {
-            -1 => return Ok(None),  // Null array
+            -1 => return Ok(None), // Null array
             len if len >= 0 => len as usize,
             _ => return Err("Invalid array length"),
         };
@@ -145,7 +145,6 @@ impl RespValue {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +188,10 @@ mod tests {
     fn test_bulk_string() {
         let input = b"$5\r\nhello\r\n";
         let result = RespValue::parse(input).unwrap();
-        assert_eq!(result, RespValue::BulkString(Option::from("hello".to_string())));
+        assert_eq!(
+            result,
+            RespValue::BulkString(Option::from("hello".to_string()))
+        );
     }
 
     #[test]
@@ -386,10 +388,7 @@ mod tests {
             RespValue::SimpleString("OK".to_string()),
             RespValue::BulkString(None),
         ]));
-        assert_eq!(
-            value.serialize(),
-            b"*3\r\n:1\r\n+OK\r\n$-1\r\n"
-        );
+        assert_eq!(value.serialize(), b"*3\r\n:1\r\n+OK\r\n$-1\r\n");
     }
 
     #[test]
@@ -398,9 +397,6 @@ mod tests {
             RespValue::Array(Some(vec![RespValue::Integer(1)])),
             RespValue::SimpleString("OK".to_string()),
         ]));
-        assert_eq!(
-            value.serialize(),
-            b"*2\r\n*1\r\n:1\r\n+OK\r\n"
-        );
+        assert_eq!(value.serialize(), b"*2\r\n*1\r\n:1\r\n+OK\r\n");
     }
 }
