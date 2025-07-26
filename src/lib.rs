@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-mod resp;
-mod storage {
-    mod memory;
+pub mod resp;
+pub mod storage {
+    pub mod memory;
 }
-mod command;
+pub mod command;
