@@ -60,6 +60,10 @@ impl StorageEngine {
     pub fn set_expire_in(&self, key: &Bytes, duration: Duration) {
         self.set_expire(key, Instant::now() + duration);
     }
+
+    pub fn exists(&self, key: &Bytes) -> bool {
+        self.data.contains_key(key)
+    }
 }
 
 #[cfg(test)]
