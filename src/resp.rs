@@ -1,9 +1,11 @@
 use std::slice::Iter;
 
+use bytes::Bytes;
+
 #[derive(Debug, PartialEq)]
 pub enum RespValue {
     SimpleString(String),
-    BulkString(Option<String>),
+    BulkString(Option<Bytes>),
     Array(Option<Vec<RespValue>>),
     Integer(i64),
     Error(String),
@@ -29,24 +31,22 @@ impl RespValue {
         s.parse().map_err(|_| "Invalid integer")
     }
 
-    fn parse_bulk_string(chars: &mut Iter<u8>) -> Result<Option<String>, &'static str> {
+    fn parse_bulk_string(chars: &mut Iter<u8>) -> Result<Option<Bytes>, &'static str> {
         let len = match Self::parse_int(chars)? {
             -1 => return Ok(None), // Null bulk string
             len if len >= 0 => len as usize,
             _ => return Err("Invalid bulk string length"),
         };
-        let mut bytes = Vec::with_capacity(len);
+        let mut bytes_vec: Vec<u8> = Vec::with_capacity(len);
         for _ in 0..len {
-            bytes.push(*chars.next().ok_or("Unexpected end of bulk string")?);
+            bytes_vec.push(*chars.next().ok_or("Unexpected end of bulk string")?);
         }
 
         if chars.next() != Some(&b'\r') || chars.next() != Some(&b'\n') {
             return Err("Bulk string not terminated with CRLF");
         }
 
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| "Invalid UTF-8 in bulk string")
+        Ok(Some(Bytes::from(bytes_vec)))
     }
 
     fn parse_array(chars: &mut Iter<u8>) -> Result<Option<Vec<RespValue>>, &'static str> {
@@ -82,7 +82,7 @@ impl RespValue {
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             RespValue::SimpleString(s) => Self::serialize_simple_string(s),
-            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt.as_deref()),
+            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt.as_ref()),
             RespValue::Array(opt) => Self::serialize_array(opt.as_deref()),
             RespValue::Integer(i) => Self::serialize_integer(*i),
             RespValue::Error(e) => Self::serialize_error(e),
@@ -113,14 +113,14 @@ impl RespValue {
         bytes
     }
 
-    fn serialize_bulk_string(s: Option<&str>) -> Vec<u8> {
+    fn serialize_bulk_string(s: Option<&Bytes>) -> Vec<u8> {
         match s {
             Some(s) => {
                 let mut bytes = Vec::new();
                 bytes.push(b'$');
                 bytes.extend(s.len().to_string().as_bytes());
                 bytes.extend(b"\r\n");
-                bytes.extend(s.as_bytes());
+                bytes.extend(s);
                 bytes.extend(b"\r\n");
                 bytes
             }
@@ -190,7 +190,7 @@ mod tests {
         let result = RespValue::parse(input).unwrap();
         assert_eq!(
             result,
-            RespValue::BulkString(Option::from("hello".to_string()))
+            RespValue::BulkString(Option::from(Bytes::from_static(b"hello")))
         );
     }
 
@@ -198,7 +198,10 @@ mod tests {
     fn test_bulk_string_empty() {
         let input = b"$0\r\n\r\n";
         let result = RespValue::parse(input).unwrap();
-        assert_eq!(result, RespValue::BulkString(Option::from("".to_string())));
+        assert_eq!(
+            result,
+            RespValue::BulkString(Option::from(Bytes::from_static(b"")))
+        );
     }
 
     #[test]
@@ -215,8 +218,8 @@ mod tests {
         assert_eq!(
             result,
             RespValue::Array(Option::from(vec![
-                RespValue::BulkString(Option::from("foo".to_string())),
-                RespValue::BulkString(Option::from("bar".to_string()))
+                RespValue::BulkString(Option::from(Bytes::from_static(b"foo"))),
+                RespValue::BulkString(Option::from(Bytes::from_static(b"bar")))
             ]))
         );
     }
@@ -344,13 +347,13 @@ mod tests {
 
     #[test]
     fn test_serialize_bulk_string() {
-        let value = RespValue::BulkString(Some("hello".to_string()));
+        let value = RespValue::BulkString(Some(Bytes::from_static(b"hello")));
         assert_eq!(value.serialize(), b"$5\r\nhello\r\n");
     }
 
     #[test]
     fn test_serialize_bulk_string_empty() {
-        let value = RespValue::BulkString(Some("".to_string()));
+        let value = RespValue::BulkString(Some(Bytes::from_static(b"")));
         assert_eq!(value.serialize(), b"$0\r\n\r\n");
     }
 
@@ -363,8 +366,8 @@ mod tests {
     #[test]
     fn test_serialize_array() {
         let value = RespValue::Array(Some(vec![
-            RespValue::BulkString(Some("foo".to_string())),
-            RespValue::BulkString(Some("bar".to_string())),
+            RespValue::BulkString(Some(Bytes::from_static(b"foo"))),
+            RespValue::BulkString(Some(Bytes::from_static(b"bar"))),
         ]));
         assert_eq!(value.serialize(), b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n");
     }
