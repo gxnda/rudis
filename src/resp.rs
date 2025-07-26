@@ -3,8 +3,8 @@ use std::slice::Iter;
 #[derive(Debug, PartialEq)]
 pub enum RespValue {
     SimpleString(String),
-    BulkString(Option<String>),    // Use Option for bulk strings
-    Array(Option<Vec<RespValue>>), // Use Option for arrays
+    BulkString(Option<String>),
+    Array(Option<Vec<RespValue>>),
     Integer(i64),
     Error(String),
 }

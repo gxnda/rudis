@@ -3,3 +3,4 @@ mod resp;
 mod storage {
     mod memory;
 }
+mod command;
