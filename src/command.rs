@@ -1,6 +1,7 @@
-use crate::resp::RespValue;
+use crate::storage::memory::StorageEngine;
+use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum Command {
@@ -13,7 +14,7 @@ pub enum Command {
     Set {
         key: Bytes,
         value: Bytes,
-        ttl: Option<Duration>,
+        ttl: Option<Instant>,
     },
     Del {
         keys: Vec<Bytes>,
@@ -92,7 +93,7 @@ impl Command {
         }
         let cmd_value = args.remove(0);
         let cmd_bytes = match cmd_value {
-            RespValue::BulkString(Some(s)) => s.into_bytes(),
+            RespValue::BulkString(Some(s)) => s,
             _ => {
                 return Err(ParseError::InvalidCommand(
                     "Command must be bulk string".to_string(),
@@ -104,7 +105,7 @@ impl Command {
         let mut arg_bytes = Vec::with_capacity(args.len());
         for arg in args {
             match arg {
-                RespValue::BulkString(Some(s)) => arg_bytes.push(Bytes::from(s.into_bytes())),
+                RespValue::BulkString(Some(s)) => arg_bytes.push(Bytes::from(s)),
                 RespValue::BulkString(None) => {
                     return Err(ParseError::InvalidArgument(
                         "Null bulk string not allowed".to_string(),
@@ -161,8 +162,8 @@ impl Command {
                             })?;
 
                             ttl = Some(match opt_str.as_str() {
-                                "EX" => Duration::from_secs(duration_val),
-                                "PX" => Duration::from_millis(duration_val),
+                                "EX" => Instant::now() + Duration::from_secs(duration_val),
+                                "PX" => Instant::now() + Duration::from_millis(duration_val),
                                 _ => unreachable!(),
                             });
                             i += 2; // Skip option and its value
@@ -372,6 +373,52 @@ impl Command {
             _ => Err(ParseError::InvalidCommand(cmd)),
         }
     }
+
+    pub fn execute(&self, storage: &StorageEngine) -> RespValue {
+        match self {
+            Command::Invalid { message: _ } => RespValue::Error("Invalid message: ".to_string()),
+            Command::Get { key } => {
+                // Bulk string reply if exists
+                // Nil reply if not
+                RespValue::BulkString(storage.get(key))
+            }
+            Command::Set { key, value, ttl } => {
+                // ttl can be none
+                storage.set(key.clone(), value.clone(), *ttl);
+                RespValue::SimpleString("OK".to_string())
+            }
+            Command::Del { keys } => {
+                for key in keys {
+                    storage.del(key)
+                }
+                RespValue::SimpleString("OK".to_string())
+            }
+            Command::Exists { keys } => {
+                let mut count: i64 = 0;
+                for key in keys {
+                    if storage.exists(key) {
+                        count += 1;
+                    }
+                }
+                RespValue::Integer(count)
+            }
+            Command::Incr { key } => {
+                // Sets to 0 if doesn't exist
+                // Otherwise increments by 1
+                // Only on i64
+                match storage.incr(key) {
+                    Ok(new_value) => RespValue::Integer(new_value),
+                    Err(IncrError::NotAnInteger) => RespValue::Error(
+                        "Error attempting to increment value, was not an integer".to_string(),
+                    ),
+                    Err(IncrError::Overflow) => RespValue::Error(
+                        "Error attempting to increment value, overflow".to_string(),
+                    ),
+                }
+            }
+            _ => RespValue::Error("Server error, command unknown.".to_string()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,7 +429,9 @@ mod command_tests {
     fn create_resp_array(items: Vec<&str>) -> RespValue {
         let mut array = Vec::new();
         for item in items {
-            array.push(RespValue::BulkString(Some(item.to_string())));
+            array.push(RespValue::BulkString(Some(Bytes::copy_from_slice(
+                item.as_bytes(),
+            ))));
         }
         RespValue::Array(Some(array))
     }
@@ -441,7 +490,7 @@ mod command_tests {
                 key,
                 value,
                 ttl: Some(ttl)
-            } if key == "key" && value == "value" && ttl == Duration::from_secs(10)
+            } if key == "key" && value == "value" && ttl > Instant::now()
         ));
 
         let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
@@ -451,7 +500,37 @@ mod command_tests {
             Command::Set {
                 ttl: Some(ttl),
                 ..
-            } if ttl == Duration::from_millis(500)
+            } if ttl > Instant::now()
+        ));
+
+        // Alternative approach with more precise testing
+        let before = Instant::now();
+        let resp = create_resp_array(vec!["SET", "key", "value", "EX", "10"]);
+        let cmd = Command::from_resp(resp).unwrap();
+        let after = Instant::now();
+        assert!(matches!(
+            cmd,
+            Command::Set {
+                key,
+                value,
+                ttl: Some(ttl)
+            } if key == "key"
+                && value == "value"
+                && ttl >= before + Duration::from_secs(10)
+                && ttl <= after + Duration::from_secs(10)
+        ));
+
+        let before = Instant::now();
+        let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
+        let cmd = Command::from_resp(resp).unwrap();
+        let after = Instant::now();
+        assert!(matches!(
+            cmd,
+            Command::Set {
+                ttl: Some(ttl),
+                ..
+            } if ttl >= before + Duration::from_millis(500)
+                && ttl <= after + Duration::from_millis(500)
         ));
     }
 
@@ -540,13 +619,13 @@ mod command_tests {
 
         let resp = RespValue::Array(Some(vec![
             RespValue::Integer(42),
-            RespValue::BulkString(Some("key".to_string())),
+            RespValue::BulkString(Some(Bytes::from_static(b"key"))),
         ]));
         let result = Command::from_resp(resp);
         assert!(matches!(result, Err(ParseError::InvalidCommand(_))));
 
-        let resp = RespValue::Array(Some(vec![RespValue::BulkString(Some(
-            "INVALID".to_string(),
+        let resp: RespValue = RespValue::Array(Some(vec![RespValue::BulkString(Some(
+            Bytes::from_static(b"INVALID"),
         ))]));
         let result = Command::from_resp(resp);
         assert!(matches!(result, Err(ParseError::InvalidCommand(_))));

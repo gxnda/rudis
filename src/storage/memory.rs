@@ -12,6 +12,11 @@ struct DataEntry {
     expiry: Option<Instant>,
 }
 
+pub enum IncrError {
+    NotAnInteger,
+    Overflow
+}
+
 impl StorageEngine {
     pub fn with_capacity_and_shards(capacity: usize, shard_count: usize) -> Self {
         StorageEngine {
@@ -63,6 +68,35 @@ impl StorageEngine {
 
     pub fn exists(&self, key: &Bytes) -> bool {
         self.data.contains_key(key)
+    }
+
+    pub fn incr(&self, key: &Bytes) -> Result<i64, IncrError> {
+        self.incr_by(key, 1)
+    }
+
+    pub fn incr_by(&self, key: &Bytes, incr: i64) -> Result<i64, IncrError> {
+        let mut entry = self.data.entry(key.clone()).or_insert_with(|| DataEntry {
+            value: Bytes::from("0"),
+            expiry: None,
+        });
+
+        if let Some(expiry) = entry.expiry {
+            if expiry < Instant::now() {
+                entry.value = Bytes::from("0");
+                entry.expiry = None;
+            }
+        }
+
+        let current_str = std::str::from_utf8(&entry.value).map_err(|_| IncrError::NotAnInteger)?;
+        let current_value: i64 = current_str.parse().map_err(|_| IncrError::NotAnInteger)?;
+
+        let new_value = current_value.checked_add(incr).ok_or(IncrError::Overflow)?;
+        entry.value = Bytes::from(new_value.to_string());
+        Ok(new_value)
+    }
+
+    pub fn decr(&self, key: &Bytes) -> Result<i64, IncrError> {
+        self.incr_by(key, -1)
     }
 }
 
