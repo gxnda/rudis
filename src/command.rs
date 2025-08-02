@@ -350,8 +350,7 @@ impl Command {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
-                    });
+                        got: arg_bytes.len(), });
                 }
                 Ok(Command::RPop {
                     key: arg_bytes[0].clone(),
@@ -416,6 +415,25 @@ impl Command {
                     ),
                 }
             }
+
+            Command::Decr { key } => match storage.decr(key) {
+                Ok(new_value) => RespValue::Integer(new_value),
+                Err(IncrError::NotAnInteger) => RespValue::Error(
+                    "Error attempting to increment value, was not an integer".to_string(),
+                ),
+                Err(IncrError::Overflow) => {
+                    RespValue::Error("Error attempting to increment value, underflow".to_string())
+                }
+            },
+
+            Command::Ping { message } => {
+                if message.is_some() {
+                    RespValue::BulkString(message.clone())
+                } else {
+                    RespValue::SimpleString("PONG".to_string())
+                }
+            }
+
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
     }
