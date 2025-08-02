@@ -7,7 +7,7 @@ pub struct StorageEngine {
     data: DashMap<Bytes, DataEntry, RandomState>,
 }
 
-struct DataEntry {
+pub struct DataEntry {
     value: Bytes,
     expiry: Option<Instant>,
 }
@@ -97,6 +97,10 @@ impl StorageEngine {
 
     pub fn decr(&self, key: &Bytes) -> Result<i64, IncrError> {
         self.incr_by(key, -1)
+    }
+
+    pub fn alter(&self, key: &Bytes, f: impl FnOnce(&Bytes, DataEntry) -> DataEntry) {
+        self.data.alter(key, f)
     }
 }
 
