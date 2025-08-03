@@ -434,6 +434,20 @@ impl Command {
                 }
             }
 
+            Command::Echo { message } => {
+                RespValue::BulkString(Some(message.clone()))
+            }
+
+            Command::FlushAll {} => {
+                storage.clear();
+                RespValue::SimpleString("OK".to_string())
+            }
+
+            Command::Keys {pattern} => {
+                
+            }
+
+
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
     }

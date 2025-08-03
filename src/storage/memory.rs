@@ -1,6 +1,8 @@
 use ahash::RandomState;
 use bytes::Bytes;
 use dashmap::DashMap;
+use regex::Regex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct StorageEngine {
@@ -14,7 +16,7 @@ pub struct DataEntry {
 
 pub enum IncrError {
     NotAnInteger,
-    Overflow
+    Overflow,
 }
 
 impl StorageEngine {
@@ -101,6 +103,25 @@ impl StorageEngine {
 
     pub fn alter(&self, key: &Bytes, f: impl FnOnce(&Bytes, DataEntry) -> DataEntry) {
         self.data.alter(key, f)
+    }
+
+    pub fn clear(&self) {
+        self.data.clear()
+    }
+
+    pub fn get_matching(&self, pattern: Regex) -> Vec<Arc<String>> {
+        // self.data is dashmap::DashMap
+        // data entrys have byte keys
+        self.data
+            .iter()
+            .filter_map(|entry| {
+                if pattern.is_match(entry.key()) {
+                    Some(Arc::clone(entry.key()))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
