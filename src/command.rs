@@ -1,4 +1,4 @@
-use crate::storage::memory::StorageEngine;
+use crate::storage::memory::{RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
 use std::time::{Duration, Instant};
@@ -350,7 +350,8 @@ impl Command {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(), });
+                        got: arg_bytes.len(),
+                    });
                 }
                 Ok(Command::RPop {
                     key: arg_bytes[0].clone(),
@@ -379,11 +380,18 @@ impl Command {
             Command::Get { key } => {
                 // Bulk string reply if exists
                 // Nil reply if not
-                RespValue::BulkString(storage.get(key))
+                match storage.get(key) {
+                    Some(RedisValue::String(s)) => RespValue::BulkString(Some(s)),
+                    None => RespValue::BulkString(None),
+                    _ => RespValue::Error(
+                        "WRONGTYPE Operation against a key holding the wrong kind of value"
+                            .to_string(),
+                    ),
+                }
             }
             Command::Set { key, value, ttl } => {
-                // ttl can be none
-                storage.set(key.clone(), value.clone(), *ttl);
+                // ttl can be none, ONLY WORKS FOR STRINGS
+                storage.set(key.clone(), RedisValue::String(value.clone()), *ttl);
                 RespValue::SimpleString("OK".to_string())
             }
             Command::Del { keys } => {
@@ -434,19 +442,21 @@ impl Command {
                 }
             }
 
-            Command::Echo { message } => {
-                RespValue::BulkString(Some(message.clone()))
-            }
+            Command::Echo { message } => RespValue::BulkString(Some(message.clone())),
 
             Command::FlushAll {} => {
                 storage.clear();
                 RespValue::SimpleString("OK".to_string())
             }
 
-            Command::Keys {pattern} => {
-                
-            }
-
+            Command::Keys { pattern } => match storage.get_matching_keys(pattern) {
+                Ok(keys) => RespValue::Array(Some(
+                    keys.iter()
+                        .map(|key| RespValue::BulkString(Some(key.clone())))
+                        .collect(),
+                )),
+                Err(e) => RespValue::Error(e.to_string()),
+            },
 
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }

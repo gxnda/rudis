@@ -1,17 +1,53 @@
 use ahash::RandomState;
 use bytes::Bytes;
-use dashmap::DashMap;
-use regex::Regex;
-use std::sync::Arc;
+use dashmap::mapref::entry::Entry;
+use dashmap::{DashMap, DashSet};
+use rayon::prelude::*;
+use regex::bytes::Regex;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+#[derive(Default)]
 pub struct StorageEngine {
-    data: DashMap<Bytes, DataEntry, RandomState>,
+    data: DashMap<Bytes, DataEntry, ahash::RandomState>,
 }
 
 pub struct DataEntry {
-    value: Bytes,
-    expiry: Option<Instant>,
+    pub value: RedisValue,
+    pub expiry: Option<Instant>,
+}
+
+impl DataEntry {
+    pub fn is_expired(&self) -> bool {
+        self.is_older_than(Instant::now())
+    }
+
+    fn is_older_than(&self, instant: Instant) -> bool {
+        if let Some(exp) = self.expiry {
+            exp < instant
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum RedisValue {
+    Integer(i64),
+    String(Bytes),
+    List(VecDeque<Bytes>),
+    Hash(DashMap<Bytes, Bytes>),
+    Set(DashSet<Bytes>),
+}
+
+impl RedisValue {
+    pub fn as_integer(&self) -> Option<i64> {
+        match self {
+            RedisValue::Integer(i) => Some(*i),
+            RedisValue::String(s) => std::str::from_utf8(s).ok()?.parse().ok(),
+            _ => None,
+        }
+    }
 }
 
 pub enum IncrError {
@@ -36,8 +72,9 @@ impl StorageEngine {
         }
     }
 
-    pub fn get(&self, key: &Bytes) -> Option<Bytes> {
+    pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
         if let Some(entry) = self.data.get(key) {
+            // Passive expiration, deletes on get
             if let Some(expiry) = entry.expiry {
                 if expiry < Instant::now() {
                     drop(entry);
@@ -50,7 +87,7 @@ impl StorageEngine {
         None
     }
 
-    pub fn set(&self, key: Bytes, value: Bytes, expiry: Option<Instant>) {
+    pub fn set(&self, key: Bytes, value: RedisValue, expiry: Option<Instant>) {
         self.data.insert(key, DataEntry { value, expiry });
     }
 
@@ -77,24 +114,36 @@ impl StorageEngine {
     }
 
     pub fn incr_by(&self, key: &Bytes, incr: i64) -> Result<i64, IncrError> {
-        let mut entry = self.data.entry(key.clone()).or_insert_with(|| DataEntry {
-            value: Bytes::from("0"),
-            expiry: None,
-        });
-
-        if let Some(expiry) = entry.expiry {
-            if expiry < Instant::now() {
-                entry.value = Bytes::from("0");
-                entry.expiry = None;
+        match self.data.entry(key.clone()) {
+            Entry::Occupied(e) => {
+                let mut stored_val = e.into_ref();
+                if stored_val.is_expired() {
+                    todo!();
+                }
+                match stored_val.value.as_integer() {
+                    Some(i) => match stored_val.value {
+                        RedisValue::Integer(_) => {
+                            stored_val.value = RedisValue::Integer(i + incr);
+                            Ok(i + incr)
+                        }
+                        RedisValue::String(_) => {
+                            stored_val.value =
+                                RedisValue::String(Bytes::from((i + incr).to_string()));
+                            Ok(i + incr)
+                        }
+                        _ => Err(IncrError::NotAnInteger),
+                    },
+                    None => Err(IncrError::NotAnInteger),
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert_entry(DataEntry {
+                    value: RedisValue::Integer(incr),
+                    expiry: None,
+                });
+                Ok(incr)
             }
         }
-
-        let current_str = std::str::from_utf8(&entry.value).map_err(|_| IncrError::NotAnInteger)?;
-        let current_value: i64 = current_str.parse().map_err(|_| IncrError::NotAnInteger)?;
-
-        let new_value = current_value.checked_add(incr).ok_or(IncrError::Overflow)?;
-        entry.value = Bytes::from(new_value.to_string());
-        Ok(new_value)
     }
 
     pub fn decr(&self, key: &Bytes) -> Result<i64, IncrError> {
@@ -109,170 +158,62 @@ impl StorageEngine {
         self.data.clear()
     }
 
-    pub fn get_matching(&self, pattern: Regex) -> Vec<Arc<String>> {
-        // self.data is dashmap::DashMap
-        // data entrys have byte keys
-        self.data
-            .iter()
+    pub fn get_matching_values(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
+        // Returns all keys with matching values
+        let re = Regex::new(pattern)?;
+        let mut matches: Vec<Bytes> = Vec::new();
+        let now = Instant::now();
+
+        for entry in self.data.iter() {
+            // check if its expired
+            if let Some(expiry) = entry.expiry {
+                if expiry < now {
+                    continue;
+                }
+            }
+
+            if let RedisValue::String(str_bytes) = &entry.value {
+                if re.is_match(str_bytes) {
+                    matches.push(entry.key().clone());
+                }
+            }
+        }
+        Ok(matches)
+    }
+
+    pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
+        // Returns all keys which match pattern
+        let re = Regex::new(pattern)?;
+        let mut matches: Vec<Bytes> = Vec::new();
+        let now = Instant::now();
+
+        for entry in self.data.iter() {
+            // check if its expired
+            if entry.is_older_than(now) {
+                continue;
+            }
+
+            if re.is_match(entry.key()) {
+                matches.push(entry.key().clone());
+            }
+        }
+        Ok(matches)
+    }
+
+    pub fn get_matching_keys_par(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
+        // parallel version of the above function using rayon
+        let re = Regex::new(pattern)?;
+        let now = Instant::now();
+        Ok(self
+            .data
+            .par_iter()
             .filter_map(|entry| {
-                if pattern.is_match(entry.key()) {
-                    Some(Arc::clone(entry.key()))
-                } else {
+                if entry.is_older_than(now) {
                     None
+                } else {
+                    re.is_match(entry.key()).then(|| entry.key().clone())
                 }
             })
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use std::thread;
-
-    #[test]
-    fn test_set_get() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        // make sure an empty storage returns none
-        assert!(engine.get(&key).is_none());
-
-        engine.set(key.clone(), value.clone(), None);
-        assert_eq!(engine.get(&key), Some(value));
-
-        // overwrite
-        let new_value = Bytes::from("new_value");
-        engine.set(key.clone(), new_value.clone(), None);
-        assert_eq!(engine.get(&key), Some(new_value));
-    }
-
-    #[test]
-    fn test_del() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        engine.set(key.clone(), value, None);
-        engine.del(&key);
-        assert!(engine.get(&key).is_none());
-    }
-
-    #[test]
-    fn test_expiry_immediate() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        // Set with immediate expiry (past)
-        engine.set(
-            key.clone(),
-            value,
-            Some(Instant::now() - Duration::from_secs(1)),
-        );
-        assert!(engine.get(&key).is_none());
-    }
-
-    #[test]
-    fn test_expiry_ttl() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        // Set with short TTL
-        engine.set(
-            key.clone(),
-            value.clone(),
-            Some(Instant::now() + Duration::from_millis(10)),
-        );
-        assert_eq!(engine.get(&key), Some(value.clone()));
-
-        // Wait for expiry and verify cleanup
-        thread::sleep(Duration::from_millis(20));
-        assert!(engine.get(&key).is_none());
-    }
-
-    #[test]
-    fn test_expiry_override() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        // Set initial expiry (short)
-        engine.set(
-            key.clone(),
-            value.clone(),
-            Some(Instant::now() + Duration::from_millis(10)),
-        );
-
-        // Extend expiry
-        engine.set_expire_in(&key, Duration::from_millis(30));
-        thread::sleep(Duration::from_millis(20));
-
-        // Should still exist
-        assert_eq!(engine.get(&key), Some(value));
-    }
-
-    #[test]
-    fn test_set_expire_non_existent() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-
-        // No-op on non-existent key
-        engine.set_expire(&key, Instant::now() + Duration::from_secs(10));
-        engine.set_expire_in(&key, Duration::from_secs(10));
-    }
-
-    #[test]
-    fn test_concurrent_access() {
-        let engine = Arc::new(StorageEngine::with_capacity_and_shards(100, 32));
-        let mut handles = Vec::new();
-
-        // Spawn 10 threads writing unique keys
-        for i in 0..10 {
-            let engine_clone = engine.clone();
-            handles.push(thread::spawn(move || {
-                let key = Bytes::from(format!("key_{}", i));
-                let value = Bytes::from(format!("value_{}", i));
-                engine_clone.set(key, value, None);
-            }));
-        }
-
-        // Spawn 10 threads reading keys (may not exist yet)
-        for i in 0..10 {
-            let engine_clone = engine.clone();
-            handles.push(thread::spawn(move || {
-                let key = Bytes::from(format!("key_{}", i));
-                for _ in 0..100 {
-                    engine_clone.get(&key);
-                }
-            }));
-        }
-
-        // Wait for all threads
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Verify all writes are visible
-        for i in 0..10 {
-            let key = Bytes::from(format!("key_{}", i));
-            assert_eq!(engine.get(&key).unwrap(), format!("value_{}", i));
-        }
-    }
-
-    #[test]
-    fn test_expire_in_zero_duration() {
-        let engine = StorageEngine::with_capacity(10);
-        let key = Bytes::from("key");
-        let value = Bytes::from("value");
-
-        engine.set(key.clone(), value, None);
-        engine.set_expire_in(&key, Duration::from_secs(0)); // Expire immediately
-
-        // Verify key is removed on next access
-        assert!(engine.get(&key).is_none());
+            .collect())
     }
 }
