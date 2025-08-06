@@ -101,6 +101,13 @@ impl StorageEngine {
         }
     }
 
+    pub fn get_expire(&self, key: &Bytes) -> Result<Option<Instant>, &'static str> {
+        match self.data.get(key) {
+            Some(entry) => Ok(entry.expiry), // return key, None if no expiry
+            None => Err("key not found"),    // key doesn't exist
+        }
+    }
+
     pub fn set_expire_in(&self, key: &Bytes, duration: Duration) {
         self.set_expire(key, Instant::now() + duration);
     }
