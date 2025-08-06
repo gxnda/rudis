@@ -458,6 +458,12 @@ impl Command {
                 Err(e) => RespValue::Error(e.to_string()),
             },
 
+            Command::TTL { key } => match storage.get_expire(key) {
+                Ok(Some(exp)) => RespValue::Integer(exp.elapsed().as_secs() as i64),
+                Ok(None) => RespValue::Integer(-1),
+                Err(_) => RespValue::Integer(-2),
+            },
+
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
     }
