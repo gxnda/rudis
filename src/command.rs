@@ -404,10 +404,13 @@ impl Command {
                 RespValue::SimpleString("OK".to_string())
             }
             Command::Del { keys } => {
+                let mut count = 0;
                 for key in keys {
-                    storage.del(key)
+                    if storage.del(key) {
+                        count += 1;
+                    }
                 }
-                RespValue::SimpleString("OK".to_string())
+                RespValue::Integer(count)
             }
             Command::Exists { keys } => {
                 let mut count: i64 = 0;

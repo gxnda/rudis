@@ -91,8 +91,8 @@ impl StorageEngine {
         self.data.insert(key, DataEntry { value, expiry });
     }
 
-    pub fn del(&self, key: &Bytes) {
-        self.data.remove(key);
+    pub fn del(&self, key: &Bytes) -> bool {
+        self.data.remove(key).is_some()
     }
 
     pub fn set_expire(&self, key: &Bytes, expiry: Option<Instant>) {
