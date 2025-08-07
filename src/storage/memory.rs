@@ -188,28 +188,44 @@ impl StorageEngine {
         Ok(matches)
     }
 
-    pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
-        // Returns all keys which match pattern
-        let re = Regex::new(pattern)?;
-        let mut matches: Vec<Bytes> = Vec::new();
-        let now = Instant::now();
+    fn glob_to_regex(glob: &str) -> String {
+        let mut regex = String::with_capacity(glob.len() * 2);
+        regex.push('^'); // Match from the start
 
-        for entry in self.data.iter() {
-            // check if its expired
-            if entry.is_older_than(now) {
-                continue;
-            }
-
-            if re.is_match(entry.key()) {
-                matches.push(entry.key().clone());
+        for c in glob.chars() {
+            match c {
+                '*' => regex.push_str(".*"),
+                '?' => regex.push('.'),
+                '.' | '+' | '(' | ')' | '|' | '^' | '$' | '\\' => {
+                    regex.push('\\');
+                    regex.push(c);
+                }
+                '[' | ']' | '{' | '}' => regex.push(c), // Keep as-is (character classes)
+                _ => regex.push(c),
             }
         }
-        Ok(matches)
+
+        regex.push('$'); // Match to the end
+        regex
+    }
+
+    pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
+        // Returns all keys which match pattern
+        let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
+        let now = Instant::now();
+
+        Ok(self
+            .data
+            .iter()
+            .filter(|entry| !entry.is_older_than(now))
+            .filter(|entry| re.is_match(entry.key()))
+            .map(|entry| entry.key().clone())
+            .collect())
     }
 
     pub fn get_matching_keys_par(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // parallel version of the above function using rayon
-        let re = Regex::new(pattern)?;
+        let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
         let now = Instant::now();
         Ok(self
             .data
