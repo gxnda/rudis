@@ -1,6 +1,6 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -59,9 +59,11 @@ pub enum Command {
     },
     LPop {
         key: Bytes,
+        count: Option<u64>,
     },
     RPop {
         key: Bytes,
+        count: Option<u64>,
     },
     LLen {
         key: Bytes,
@@ -335,29 +337,35 @@ impl Command {
                 Ok(Command::RPush { key, elements })
             }
 
-            "LPOP" => {
-                if arg_bytes.len() != 1 {
-                    return Err(ParseError::InvalidArgCount {
-                        expected: 1,
-                        got: arg_bytes.len(),
-                    });
-                }
-                Ok(Command::LPop {
+            "LPOP" => match arg_bytes.len() {
+                1 => Ok(Command::LPop {
                     key: arg_bytes[0].clone(),
-                })
-            }
+                    count: None,
+                }),
+                2 => Ok(Command::LPop {
+                    key: arg_bytes[0].clone(),
+                    count: Some(Bytes::get_u64(&mut arg_bytes[1].clone())),
+                }),
+                _ => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: arg_bytes.len(),
+                }),
+            },
 
-            "RPOP" => {
-                if arg_bytes.len() != 1 {
-                    return Err(ParseError::InvalidArgCount {
-                        expected: 1,
-                        got: arg_bytes.len(),
-                    });
-                }
-                Ok(Command::RPop {
+            "RPOP" => match arg_bytes.len() {
+                1 => Ok(Command::RPop {
                     key: arg_bytes[0].clone(),
-                })
-            }
+                    count: None,
+                }),
+                2 => Ok(Command::RPop {
+                    key: arg_bytes[0].clone(),
+                    count: Some(Bytes::get_u64(&mut arg_bytes[1].clone())),
+                }),
+                _ => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: arg_bytes.len(),
+                }),
+            },
 
             "LLEN" => {
                 if arg_bytes.len() != 1 {
@@ -555,6 +563,42 @@ impl Command {
                     RespValue::Integer(elements.len() as i64)
                 }
             }
+
+            Command::LPop { key, count } => match storage.get(key) {
+                Some(RedisValue::List(mut arr)) => match count {
+                    Some(count) => {
+                        let mut popped: Vec<RespValue> = Vec::new();
+                        for _ in 1..*count {
+                            popped.push(RespValue::BulkString(arr.pop_front()));
+                        }
+                        RespValue::Array(Some(popped))
+                    }
+                    None => RespValue::BulkString(arr.pop_front()),
+                },
+                _ => RespValue::BulkString(None),
+            },
+
+            Command::RPop { key, count } => match storage.get(key) {
+                Some(RedisValue::List(mut arr)) => match count {
+                    Some(count) => {
+                        let mut popped: Vec<RespValue> = Vec::new();
+                        for _ in 1..*count {
+                            popped.push(RespValue::BulkString(arr.pop_back()));
+                        }
+                        RespValue::Array(Some(popped))
+                    }
+                    None => RespValue::BulkString(arr.pop_back()),
+                },
+                _ => RespValue::BulkString(None),
+            },
+
+            Command::LLen { key } => match storage.get(key) {
+                Some(RedisValue::List(arr)) => RespValue::Integer(arr.len() as i64),
+                None => RespValue::Integer(0),
+                _ => RespValue::Error(
+                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                ),
+            },
 
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
