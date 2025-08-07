@@ -12,6 +12,31 @@ pub enum RespValue {
 }
 
 impl RespValue {
+    pub fn as_integer(&self) -> Result<i64, &'static str> {
+        match self {
+            RespValue::Integer(i) => Ok(*i),
+            RespValue::BulkString(Some(bytes)) => {
+                let array: [u8; 8] = bytes
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| "invalid length for i64 conversion")?;
+                Ok(i64::from_be_bytes(array))
+            }
+            _ => Err("cannot be represented as integer"),
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.is_err()
+    }
+
+    pub fn is_err(&self) -> bool {
+        match self {
+            RespValue::Error(_) => true,
+            _ => false,
+        }
+    }
+
     fn parse_str(chars: &mut Iter<u8>) -> Result<String, &'static str> {
         let mut bytes = Vec::new();
         while let Some(&byte) = chars.next() {
