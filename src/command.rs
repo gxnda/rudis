@@ -534,7 +534,7 @@ impl Command {
                         }
                     });
                     if type_error {
-                        RespValue::SimpleString(
+                        RespValue::Error(
                             "WRONGTYPE Operation against a key holding the wrong kind of value"
                                 .to_string(),
                         )
@@ -570,7 +570,7 @@ impl Command {
                     });
 
                     if type_error {
-                        RespValue::SimpleString(
+                        RespValue::Error(
                             "WRONGTYPE Operation against a key holding the wrong kind of value"
                                 .to_string(),
                         )
@@ -586,7 +586,7 @@ impl Command {
             }
 
             Command::LPop { key, count } => match storage.get(key) {
-                Some(RedisValue::List(mut arr)) => match count {
+                Some(RedisValue::List(_)) => match count {
                     Some(count) => {
                         let mut popped = vec![];
                         storage.alter(key, |_, mut val| {
@@ -599,13 +599,22 @@ impl Command {
                         });
                         RespValue::Array(Some(popped))
                     }
-                    None => RespValue::BulkString(arr.pop_front()),
+                    None => {
+                        let mut result = RespValue::BulkString(None);
+                        storage.alter(key, |_, mut val| {
+                            if let RedisValue::List(list) = &mut val.value {
+                                result = RespValue::BulkString(list.pop_front());
+                            }
+                            val
+                        });
+                        result
+                    },
                 },
                 _ => RespValue::BulkString(None),
             },
 
             Command::RPop { key, count } => match storage.get(key) {
-                Some(RedisValue::List(mut arr)) => match count {
+                Some(RedisValue::List(_)) => match count {
                     Some(count) => {
                         let mut popped = vec![];
                         storage.alter(key, |_, mut val| {
@@ -618,13 +627,25 @@ impl Command {
                         });
                         RespValue::Array(Some(popped))
                     }
-                    None => RespValue::BulkString(arr.pop_front()),
+                    None => {
+                        let mut result = RespValue::BulkString(None);
+                        storage.alter(key, |_, mut val| {
+                            if let RedisValue::List(list) = &mut val.value {
+                                result = RespValue::BulkString(list.pop_back());
+                            }
+                            val
+                        });
+                        result
+                    },
                 },
                 _ => RespValue::BulkString(None),
             },
 
             Command::LLen { key } => match storage.get(key) {
-                Some(RedisValue::List(arr)) => RespValue::Integer(arr.len() as i64),
+                Some(RedisValue::List(arr)) => {
+                    println!("{:?}", arr);
+                    RespValue::Integer(arr.len() as i64)
+                },
                 None => RespValue::Integer(0),
                 _ => RespValue::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
@@ -896,11 +917,18 @@ mod tests {
         // LPOP single
         let lpop_cmd = resp_array(vec![b"LPOP", key]);
         let cmd = Command::from_resp(lpop_cmd).unwrap();
+        println!("{:?}", cmd);
         let response = cmd.execute(&storage);
         assert_eq!(
             response,
             RespValue::BulkString(Some(Bytes::from_static(b"b")))
         );
+
+        // Debug to make sure everythings going alright
+        let llen_cmd = resp_array(vec![b"LLEN", key]);
+        let cmd = Command::from_resp(llen_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(3)); // Should be left with acd
 
         // RPOP multiple
         let rpop_cmd = resp_array(vec![b"RPOP", key, b"2"]);
@@ -924,6 +952,7 @@ mod tests {
         let llen_cmd = resp_array(vec![b"LLEN", key]);
         let cmd = Command::from_resp(llen_cmd).unwrap();
         let response = cmd.execute(&storage);
+        println!("response: {:?}", response);
         assert_eq!(response, RespValue::Integer(1));
     }
 
@@ -943,6 +972,7 @@ mod tests {
         let lpush_cmd = resp_array(vec![b"LPUSH", key, b"elem"]);
         let cmd = Command::from_resp(lpush_cmd).unwrap();
         let response = cmd.execute(&storage);
+        println!("{:?}", response);
         assert!(response.is_error());
     }
 
