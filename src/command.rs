@@ -1,6 +1,6 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -342,10 +342,17 @@ impl Command {
                     key: arg_bytes[0].clone(),
                     count: None,
                 }),
-                2 => Ok(Command::LPop {
-                    key: arg_bytes[0].clone(),
-                    count: Some(Bytes::get_u64(&mut arg_bytes[1].clone())),
-                }),
+                2 => {
+                    let count_str = std::str::from_utf8(&arg_bytes[1])
+                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
+                    let count = count_str
+                        .parse::<u64>()
+                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
+                    Ok(Command::LPop {
+                        key: arg_bytes[0].clone(),
+                        count: Some(count),
+                    })
+                }
                 _ => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: arg_bytes.len(),
@@ -357,10 +364,16 @@ impl Command {
                     key: arg_bytes[0].clone(),
                     count: None,
                 }),
-                2 => Ok(Command::RPop {
-                    key: arg_bytes[0].clone(),
-                    count: Some(Bytes::get_u64(&mut arg_bytes[1].clone())),
-                }),
+                2 => {
+                    let count = std::str::from_utf8(&arg_bytes[1])
+                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?
+                        .parse::<u64>()
+                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
+                    Ok(Command::RPop {
+                        key: arg_bytes[0].clone(),
+                        count: Some(count),
+                    })
+                }
                 _ => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: arg_bytes.len(),
