@@ -343,9 +343,8 @@ impl Command {
                     count: None,
                 }),
                 2 => {
-                    let count_str = std::str::from_utf8(&arg_bytes[1])
-                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
-                    let count = count_str
+                    let count = std::str::from_utf8(&arg_bytes[1])
+                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?
                         .parse::<u64>()
                         .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
                     Ok(Command::LPop {
@@ -631,219 +630,349 @@ impl Command {
                     "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
                 ),
             },
-
-            _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
     }
 }
 
 #[cfg(test)]
-mod command_tests {
+mod tests {
     use super::*;
-    use std::time::Duration;
+    use crate::storage::memory::StorageEngine;
+    use bytes::Bytes;
+    use std::time::Instant;
 
-    fn create_resp_array(items: Vec<&str>) -> RespValue {
-        let mut array = Vec::new();
-        for item in items {
-            array.push(RespValue::BulkString(Some(Bytes::copy_from_slice(
-                item.as_bytes(),
-            ))));
-        }
-        RespValue::Array(Some(array))
+    // Helper to create RESP command array
+    fn resp_array(args: Vec<&[u8]>) -> RespValue {
+        RespValue::Array(Some(
+            args.into_iter()
+                .map(|a| RespValue::BulkString(Some(a.to_vec().into())))
+                .collect(),
+        ))
     }
 
     #[test]
-    fn test_get_command() {
-        let resp = create_resp_array(vec!["GET", "mykey"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::Get { key } if key == "mykey"));
-    }
-
-    #[test]
-    fn test_get_command_invalid() {
-        let resp = create_resp_array(vec!["GET"]);
-        let result = Command::from_resp(resp);
+    fn test_invalid_commands() {
+        // Empty command
+        let resp = RespValue::Array(None);
         assert!(matches!(
-            result,
+            Command::from_resp(resp),
+            Err(ParseError::InvalidCommand(_))
+        ));
+
+        // Non-array command
+        let resp = RespValue::SimpleString("SET foo bar".to_string());
+        assert!(matches!(
+            Command::from_resp(resp),
+            Err(ParseError::InvalidCommand(_))
+        ));
+
+        // Unknown command
+        let resp = resp_array(vec![b"FOOBAR", b"key"]);
+        assert!(matches!(
+            Command::from_resp(resp),
+            Err(ParseError::InvalidCommand(_))
+        ));
+    }
+
+    #[test]
+    fn test_get_set() {
+        let storage = StorageEngine::with_capacity(100);
+        let key = b"test_key";
+        let value = b"test_value";
+
+        // Test SET
+        let set_cmd = resp_array(vec![b"SET", key, value]);
+        let cmd = Command::from_resp(set_cmd).unwrap();
+        assert!(matches!(cmd, Command::Set { .. }));
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::SimpleString("OK".to_string()));
+
+        // Test GET
+        let get_cmd = resp_array(vec![b"GET", key]);
+        let cmd = Command::from_resp(get_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(
+            response,
+            RespValue::BulkString(Some(Bytes::copy_from_slice(value)))
+        );
+
+        // Test GET non-existent
+        let get_cmd = resp_array(vec![b"GET", b"missing"]);
+        let cmd = Command::from_resp(get_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::BulkString(None));
+    }
+
+    #[test]
+    fn test_set_with_ttl() {
+        let key = b"expiring_key";
+        let value = b"value";
+
+        // SET with EX
+        let set_cmd = resp_array(vec![b"SET", key, value, b"EX", b"10"]);
+        let cmd = Command::from_resp(set_cmd).unwrap();
+        if let Command::Set { ttl, .. } = cmd {
+            assert!(ttl.is_some());
+            assert!(ttl.unwrap() > Instant::now());
+        } else {
+            panic!("Not a SET command");
+        }
+
+        // Invalid TTL value
+        let set_cmd = resp_array(vec![b"SET", key, value, b"EX", b"not_a_number"]);
+        assert!(matches!(
+            Command::from_resp(set_cmd),
+            Err(ParseError::InvalidDuration(_))
+        ));
+    }
+
+    #[test]
+    fn test_del_exists() {
+        let storage = StorageEngine::with_capacity(100);
+        let keys = vec![b"k1", b"k2", b"k3"];
+
+        // Set keys
+        for key in &keys {
+            storage.set(
+                Bytes::from_static(*key),
+                RedisValue::String(Bytes::from_static(b"v")),
+                None,
+            );
+        }
+
+        // DEL multiple keys
+        let del_cmd = resp_array(vec![b"DEL", keys[0], keys[1], b"missing"]);
+        let cmd = Command::from_resp(del_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(2)); // 2 keys deleted
+
+        // EXISTS check
+        let exists_cmd = resp_array(vec![b"EXISTS", keys[0], keys[1], keys[2]]);
+        let cmd = Command::from_resp(exists_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(1)); // Only keys[2] exists
+    }
+
+    #[test]
+    fn test_incr_decr() {
+        let storage = StorageEngine::with_capacity(100);
+        let key = b"counter";
+
+        // INCR new key
+        let incr_cmd = resp_array(vec![b"INCR", key]);
+        let cmd = Command::from_resp(incr_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(1));
+
+        // DECR existing key
+        let decr_cmd = resp_array(vec![b"DECR", key]);
+        let cmd = Command::from_resp(decr_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(0));
+
+        // Test type error
+        storage.set(
+            Bytes::from_static(key),
+            RedisValue::String(Bytes::from_static(b"not_int")),
+            None,
+        );
+        let incr_cmd = resp_array(vec![b"INCR", key]);
+        let cmd = Command::from_resp(incr_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert!(matches!(response, RespValue::Error(_)));
+    }
+
+    #[test]
+    fn test_ping_echo() {
+        let storage = StorageEngine::with_capacity(100);
+
+        // PING without message
+        let ping_cmd = resp_array(vec![b"PING"]);
+        let cmd = Command::from_resp(ping_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::SimpleString("PONG".to_string()));
+
+        // PING with message
+        let ping_cmd = resp_array(vec![b"PING", b"Hello"]);
+        let cmd = Command::from_resp(ping_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(
+            response,
+            RespValue::BulkString(Some(Bytes::from_static(b"Hello")))
+        );
+
+        // ECHO
+        let echo_cmd = resp_array(vec![b"ECHO", b"Hello"]);
+        let cmd = Command::from_resp(echo_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(
+            response,
+            RespValue::BulkString(Some(Bytes::from_static(b"Hello")))
+        );
+    }
+
+    #[test]
+    fn test_flushall_keys() {
+        let storage = StorageEngine::with_capacity(100);
+        storage.set(
+            Bytes::from_static(b"key1"),
+            RedisValue::String(Bytes::from_static(b"v1")),
+            None,
+        );
+
+        // KEYS command
+        let keys_cmd = resp_array(vec![b"KEYS", b"*"]);
+        let cmd = Command::from_resp(keys_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        println!("Actual response: {:?}", response);
+        assert!(matches!(response, RespValue::Array(Some(_))));
+
+        // FLUSHALL
+        let flush_cmd = resp_array(vec![b"FLUSHALL"]);
+        let cmd = Command::from_resp(flush_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::SimpleString("OK".to_string()));
+        assert!(storage.get(&Bytes::from_static(b"key1")).is_none());
+    }
+
+    #[test]
+    fn test_ttl_expire_persist() {
+        let storage = StorageEngine::with_capacity(100);
+        let key = b"temp_key";
+        storage.set(
+            Bytes::from_static(key),
+            RedisValue::String(Bytes::from_static(b"value")),
+            None,
+        );
+
+        // EXPIRE
+        let expire_cmd = resp_array(vec![b"EXPIRE", key, b"60"]);
+        let cmd = Command::from_resp(expire_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(1));
+
+        // TTL should be positive
+        let ttl_cmd = resp_array(vec![b"TTL", key]);
+        let cmd = Command::from_resp(ttl_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert!(response.as_integer().unwrap() > 0);
+
+        // PERSIST
+        let persist_cmd = resp_array(vec![b"PERSIST", key]);
+        let cmd = Command::from_resp(persist_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(1));
+
+        // TTL should be -1 after persist
+        let ttl_cmd = resp_array(vec![b"TTL", key]);
+        let cmd = Command::from_resp(ttl_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(-1));
+    }
+
+    #[test]
+    fn test_list_commands() {
+        let storage = StorageEngine::with_capacity(100);
+        let key = b"mylist";
+
+        // LPUSH
+        let lpush_cmd = resp_array(vec![b"LPUSH", key, b"a", b"b"]);
+        let cmd = Command::from_resp(lpush_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(2));
+
+        // RPUSH
+        let rpush_cmd = resp_array(vec![b"RPUSH", key, b"c", b"d"]);
+        let cmd = Command::from_resp(rpush_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(4));
+
+        // LLEN
+        let llen_cmd = resp_array(vec![b"LLEN", key]);
+        let cmd = Command::from_resp(llen_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(4));
+
+        // LPOP single
+        let lpop_cmd = resp_array(vec![b"LPOP", key]);
+        let cmd = Command::from_resp(lpop_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(
+            response,
+            RespValue::BulkString(Some(Bytes::from_static(b"b")))
+        );
+
+        // RPOP multiple
+        let rpop_cmd = resp_array(vec![b"RPOP", key, b"2"]);
+        let cmd = Command::from_resp(rpop_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        if let RespValue::Array(Some(elements)) = response {
+            assert_eq!(elements.len(), 2);
+            assert_eq!(
+                elements[0],
+                RespValue::BulkString(Some(Bytes::from_static(b"d")))
+            );
+            assert_eq!(
+                elements[1],
+                RespValue::BulkString(Some(Bytes::from_static(b"c")))
+            );
+        } else {
+            panic!("Expected array response");
+        }
+
+        // Final length should be 1
+        let llen_cmd = resp_array(vec![b"LLEN", key]);
+        let cmd = Command::from_resp(llen_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert_eq!(response, RespValue::Integer(1));
+    }
+
+    #[test]
+    fn test_type_errors() {
+        let storage = StorageEngine::with_capacity(100);
+        let key = b"key";
+
+        // Set as string
+        storage.set(
+            Bytes::from_static(key),
+            RedisValue::String(Bytes::from_static(b"value")),
+            None,
+        );
+
+        // Try list operation on string
+        let lpush_cmd = resp_array(vec![b"LPUSH", key, b"elem"]);
+        let cmd = Command::from_resp(lpush_cmd).unwrap();
+        let response = cmd.execute(&storage);
+        assert!(response.is_error());
+    }
+
+    #[test]
+    fn test_argument_errors() {
+        // GET with no arguments
+        let get_cmd = resp_array(vec![b"GET"]);
+        assert!(matches!(
+            Command::from_resp(get_cmd),
             Err(ParseError::InvalidArgCount {
                 expected: 1,
                 got: 0
             })
         ));
 
-        let resp = create_resp_array(vec!["GET", "key1", "key2"]);
-        let result = Command::from_resp(resp);
+        // SET with insufficient arguments
+        let set_cmd = resp_array(vec![b"SET", b"key"]);
         assert!(matches!(
-            result,
-            Err(ParseError::InvalidArgCount {
-                expected: 1,
-                got: 2
-            })
-        ));
-    }
-
-    #[test]
-    fn test_set_command() {
-        let resp = create_resp_array(vec!["SET", "key", "value"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                key,
-                value,
-                ttl: None
-            } if key == "key" && value == "value"
-        ));
-    }
-
-    #[test]
-    fn test_set_command_with_ttl() {
-        let resp = create_resp_array(vec!["SET", "key", "value", "EX", "10"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                key,
-                value,
-                ttl: Some(ttl)
-            } if key == "key" && value == "value" && ttl > Instant::now()
-        ));
-
-        let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                ttl: Some(ttl),
-                ..
-            } if ttl > Instant::now()
-        ));
-
-        // Alternative approach with more precise testing
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                key,
-                value,
-                ttl: Some(ttl)
-            } if key == "key" && value == "value" && ttl > Instant::now()
-        ));
-
-        let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                ttl: Some(ttl),
-                ..
-            } if ttl > Instant::now()
-        ));
-
-        // Alternative approach with more precise testing
-        let before = Instant::now();
-        let resp = create_resp_array(vec!["SET", "key", "value", "EX", "10"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        let after = Instant::now();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                key,
-                value,
-                ttl: Some(ttl)
-            } if key == "key"
-                && value == "value"
-                && ttl >= before + Duration::from_secs(10)
-                && ttl <= after + Duration::from_secs(10)
-        ));
-
-        let before = Instant::now();
-        let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        let after = Instant::now();
-        assert!(matches!(
-            cmd,
-            Command::Set {
-                ttl: Some(ttl),
-                ..
-            } if ttl >= before + Duration::from_millis(500)
-                && ttl <= after + Duration::from_millis(500)
-        ));
-    }
-
-    #[test]
-    fn test_set_command_invalid() {
-        let resp = create_resp_array(vec!["SET", "key"]);
-        let result = Command::from_resp(resp);
-        assert!(matches!(
-            result,
+            Command::from_resp(set_cmd),
             Err(ParseError::InvalidArgCount {
                 expected: 2,
                 got: 1
             })
         ));
 
-        let resp = create_resp_array(vec!["SET", "key", "value", "INVALID", "10"]);
-        let result = Command::from_resp(resp);
-        assert!(matches!(result, Err(ParseError::InvalidArgument(_))));
-
-        let resp = create_resp_array(vec!["SET", "key", "value", "EX", "invalid"]);
-        let result = Command::from_resp(resp);
-        assert!(matches!(result, Err(ParseError::InvalidDuration(_))));
-    }
-
-    #[test]
-    fn test_del_command() {
-        let resp = create_resp_array(vec!["DEL", "key1", "key2", "key3"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::Del { keys } if keys.len() == 3));
-    }
-
-    #[test]
-    fn test_ping_command() {
-        let resp = create_resp_array(vec!["PING"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::Ping { message: None }));
-
-        let resp = create_resp_array(vec!["PING", "Hello"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::Ping { message: Some(msg) } if msg == "Hello"));
-    }
-
-    #[test]
-    fn test_expire_command() {
-        let resp = create_resp_array(vec!["EXPIRE", "mykey", "10"]);
-        let cmd = Command::from_resp(resp).unwrap();
+        // EXPIRE with invalid duration
+        let expire_cmd = resp_array(vec![b"EXPIRE", b"key", b"not_a_number"]);
         assert!(matches!(
-            cmd,
-            Command::Expire { key, ttl }
-            if key == "mykey" && ttl == Duration::from_secs(10)
+            Command::from_resp(expire_cmd),
+            Err(ParseError::InvalidDuration(_))
         ));
-    }
-
-    #[test]
-    fn test_list_commands() {
-        let resp = create_resp_array(vec!["LPUSH", "mylist", "v1", "v2", "v3"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::LLen { key } if key == "mylist"));
-    }
-
-    #[test]
-    fn test_invalid_commands() {
-        let resp = RespValue::SimpleString("PING".to_string());
-        let result = Command::from_resp(resp);
-        assert!(matches!(result, Err(ParseError::InvalidCommand(_))));
-
-        let resp = RespValue::Array(Some(vec![
-            RespValue::Integer(42),
-            RespValue::BulkString(Some(Bytes::from_static(b"key"))),
-        ]));
-        let result = Command::from_resp(resp);
-        assert!(matches!(result, Err(ParseError::InvalidCommand(_))));
-
-        let resp: RespValue = RespValue::Array(Some(vec![RespValue::BulkString(Some(
-            Bytes::from_static(b"INVALID"),
-        ))]));
-        let result = Command::from_resp(resp);
-        assert!(matches!(result, Err(ParseError::InvalidCommand(_))));
     }
 }
