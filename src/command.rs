@@ -576,10 +576,15 @@ impl Command {
             Command::LPop { key, count } => match storage.get(key) {
                 Some(RedisValue::List(mut arr)) => match count {
                     Some(count) => {
-                        let mut popped: Vec<RespValue> = Vec::new();
-                        for _ in 1..*count {
-                            popped.push(RespValue::BulkString(arr.pop_front()));
-                        }
+                        let mut popped = vec![];
+                        storage.alter(key, |_, mut val| {
+                            if let RedisValue::List(list) = &mut val.value {
+                                for _ in 0..(*count).min(list.len() as u64) {
+                                    popped.push(RespValue::BulkString(list.pop_front()));
+                                }
+                            }
+                            val
+                        });
                         RespValue::Array(Some(popped))
                     }
                     None => RespValue::BulkString(arr.pop_front()),
@@ -590,13 +595,18 @@ impl Command {
             Command::RPop { key, count } => match storage.get(key) {
                 Some(RedisValue::List(mut arr)) => match count {
                     Some(count) => {
-                        let mut popped: Vec<RespValue> = Vec::new();
-                        for _ in 1..*count {
-                            popped.push(RespValue::BulkString(arr.pop_back()));
-                        }
+                        let mut popped = vec![];
+                        storage.alter(key, |_, mut val| {
+                            if let RedisValue::List(list) = &mut val.value {
+                                for _ in 0..(*count).min(list.len() as u64) {
+                                    popped.push(RespValue::BulkString(list.pop_back()));
+                                }
+                            }
+                            val
+                        });
                         RespValue::Array(Some(popped))
                     }
-                    None => RespValue::BulkString(arr.pop_back()),
+                    None => RespValue::BulkString(arr.pop_front()),
                 },
                 _ => RespValue::BulkString(None),
             },
