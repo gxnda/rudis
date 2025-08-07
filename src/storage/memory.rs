@@ -95,9 +95,9 @@ impl StorageEngine {
         self.data.remove(key);
     }
 
-    pub fn set_expire(&self, key: &Bytes, expiry: Instant) {
+    pub fn set_expire(&self, key: &Bytes, expiry: Option<Instant>) {
         if let Some(mut entry) = self.data.get_mut(key) {
-            entry.expiry = Some(expiry);
+            entry.expiry = expiry;
         }
     }
 
@@ -109,7 +109,7 @@ impl StorageEngine {
     }
 
     pub fn set_expire_in(&self, key: &Bytes, duration: Duration) {
-        self.set_expire(key, Instant::now() + duration);
+        self.set_expire(key, Some(Instant::now() + duration));
     }
 
     pub fn exists(&self, key: &Bytes) -> bool {

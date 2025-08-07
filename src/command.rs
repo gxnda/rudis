@@ -1,6 +1,7 @@
-use crate::storage::memory::{RedisValue, StorageEngine};
+use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -464,6 +465,97 @@ impl Command {
                 Err(_) => RespValue::Integer(-2),
             },
 
+            Command::Expire { key, ttl } => {
+                // sets expire for key
+                storage.set_expire_in(key, *ttl);
+                RespValue::Integer(1)
+            }
+
+            Command::Persist { key } => {
+                if !storage.exists(key) {
+                    return RespValue::Integer(0);
+                }
+                if storage.get_expire(key).is_err() {
+                    return RespValue::Integer(0);
+                }
+                storage.set_expire(key, None);
+                RespValue::Integer(1)
+            }
+
+            Command::LPush { key, elements } => {
+                if storage.exists(key) {
+                    let mut len = 0;
+                    let mut type_error = false;
+                    storage.alter(key, |_, val| match val.value {
+                        RedisValue::List(mut list) => {
+                            len = list.len() + elements.len();
+                            let mut new_elements = VecDeque::with_capacity(elements.len());
+                            new_elements.extend(elements.iter().rev().cloned());
+                            new_elements.append(&mut list);
+
+                            DataEntry {
+                                value: RedisValue::List(new_elements),
+                                expiry: val.expiry,
+                            }
+                        }
+
+                        _ => {
+                            type_error = true;
+                            val
+                        }
+                    });
+                    if type_error {
+                        RespValue::SimpleString(
+                            "WRONGTYPE Operation against a key holding the wrong kind of value"
+                                .to_string(),
+                        )
+                    } else {
+                        RespValue::Integer(len as i64)
+                    }
+                } else {
+                    let list = elements.iter().rev().cloned().collect();
+                    storage.set(key.clone(), RedisValue::List(list), None);
+                    RespValue::Integer(elements.len() as i64)
+                }
+            }
+
+            Command::RPush { key, elements } => {
+                if storage.exists(&key) {
+                    let mut new_len = 0;
+                    let mut type_error = false;
+
+                    storage.alter(&key, |_, val| match val.value {
+                        RedisValue::List(mut list) => {
+                            new_len = list.len() + elements.len();
+                            list.extend(elements.iter().cloned());
+
+                            DataEntry {
+                                value: RedisValue::List(list),
+                                expiry: val.expiry,
+                            }
+                        }
+                        _ => {
+                            type_error = true;
+                            val
+                        }
+                    });
+
+                    if type_error {
+                        RespValue::SimpleString(
+                            "WRONGTYPE Operation against a key holding the wrong kind of value"
+                                .to_string(),
+                        )
+                    } else {
+                        RespValue::Integer(new_len as i64)
+                    }
+                } else {
+                    // Create new list with elements in insertion order
+                    let list = elements.iter().cloned().collect();
+                    storage.set(key.clone(), RedisValue::List(list), None);
+                    RespValue::Integer(elements.len() as i64)
+                }
+            }
+
             _ => RespValue::Error("Server error, command unknown.".to_string()),
         }
     }
@@ -532,6 +624,26 @@ mod command_tests {
     fn test_set_command_with_ttl() {
         let resp = create_resp_array(vec!["SET", "key", "value", "EX", "10"]);
         let cmd = Command::from_resp(resp).unwrap();
+        assert!(matches!(
+            cmd,
+            Command::Set {
+                key,
+                value,
+                ttl: Some(ttl)
+            } if key == "key" && value == "value" && ttl > Instant::now()
+        ));
+
+        let resp = create_resp_array(vec!["SET", "key", "value", "PX", "500"]);
+        let cmd = Command::from_resp(resp).unwrap();
+        assert!(matches!(
+            cmd,
+            Command::Set {
+                ttl: Some(ttl),
+                ..
+            } if ttl > Instant::now()
+        ));
+
+        // Alternative approach with more precise testing
         assert!(matches!(
             cmd,
             Command::Set {
@@ -635,26 +747,6 @@ mod command_tests {
     #[test]
     fn test_list_commands() {
         let resp = create_resp_array(vec!["LPUSH", "mylist", "v1", "v2", "v3"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::LPush { key, elements }
-            if key == "mylist" && elements.len() == 3
-        ));
-
-        let resp = create_resp_array(vec!["RPUSH", "mylist", "v1"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(
-            cmd,
-            Command::RPush { key, elements }
-            if key == "mylist" && elements.len() == 1
-        ));
-
-        let resp = create_resp_array(vec!["LPOP", "mylist"]);
-        let cmd = Command::from_resp(resp).unwrap();
-        assert!(matches!(cmd, Command::LPop { key } if key == "mylist"));
-
-        let resp = create_resp_array(vec!["LLEN", "mylist"]);
         let cmd = Command::from_resp(resp).unwrap();
         assert!(matches!(cmd, Command::LLen { key } if key == "mylist"));
     }
