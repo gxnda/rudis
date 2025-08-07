@@ -479,9 +479,13 @@ impl Command {
             },
 
             Command::Expire { key, ttl } => {
-                // sets expire for key
-                storage.set_expire_in(key, *ttl);
-                RespValue::Integer(1)
+                if storage.exists(key) {
+                    // sets expire for key
+                    storage.set_expire_in(key, *ttl);
+                    RespValue::Integer(1)
+                } else {
+                    RespValue::Integer(0)
+                }
             }
 
             Command::Persist { key } => {
