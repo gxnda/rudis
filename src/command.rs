@@ -471,7 +471,9 @@ impl Command {
             },
 
             Command::TTL { key } => match storage.get_expire(key) {
-                Ok(Some(exp)) => RespValue::Integer(exp.elapsed().as_secs() as i64),
+                Ok(Some(exp)) => {
+                    RespValue::Integer(exp.duration_since(Instant::now()).as_secs() as i64)
+                }
                 Ok(None) => RespValue::Integer(-1),
                 Err(_) => RespValue::Integer(-2),
             },
