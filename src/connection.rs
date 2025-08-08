@@ -2,7 +2,7 @@ use crate::resp::{ParseError, RespValue};
 use crate::storage::memory::StorageEngine;
 use bytes::Buf;
 use bytes::BytesMut;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::{io, time::SystemTimeError};
@@ -96,6 +96,11 @@ impl Connection {
     }
 
     pub fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
-        let serialized: Vec<u8> = response.serialize();
+        let serialized = response.serialize();
+        self.stream
+            .write_all(&serialized)
+            .map_err(ConnectionError::Io)?;
+        self.stream.flush().map_err(ConnectionError::Io)?;
+        Ok(())
     }
 }
