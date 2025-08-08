@@ -4,3 +4,4 @@ pub mod storage {
     pub mod memory;
 }
 pub mod command;
+pub mod connection;
