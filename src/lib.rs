@@ -2,6 +2,7 @@
 pub mod resp;
 pub mod storage {
     pub mod memory;
+    pub mod persistence;
 }
 pub mod command;
 pub mod config;
