@@ -4,34 +4,30 @@ use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
 use regex::bytes::Regex;
+use serde::de::{self, Error, SeqAccess, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct StorageEngine {
+    #[serde(
+        serialize_with = "serialize_dashmap",
+        deserialize_with = "deserialize_dashmap"
+    )]
     data: Arc<DashMap<Bytes, DataEntry, ahash::RandomState>>,
+    #[serde(skip)]
     cancel_token: CancellationToken,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct DataEntry {
     pub value: RedisValue,
     pub expiry: Option<Instant>,
-}
-
-impl DataEntry {
-    pub fn is_expired(&self) -> bool {
-        self.is_older_than(Instant::now())
-    }
-
-    fn is_older_than(&self, instant: Instant) -> bool {
-        if let Some(exp) = self.expiry {
-            exp < instant
-        } else {
-            false
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -43,12 +39,265 @@ pub enum RedisValue {
     Set(DashSet<Bytes>),
 }
 
+fn serialize_dashmap<S>(
+    data: &Arc<DashMap<Bytes, DataEntry, RandomState>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let map: &DashMap<Bytes, DataEntry, RandomState> = data;
+    map.serialize(serializer)
+}
+
+fn deserialize_dashmap<'de, D>(
+    deserializer: D,
+) -> Result<Arc<DashMap<Bytes, DataEntry, RandomState>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map = DashMap::<Bytes, DataEntry, RandomState>::deserialize(deserializer)?;
+    Ok(Arc::new(map))
+}
+
+impl Serialize for RedisValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            RedisValue::Integer(i) => serializer.serialize_i64(*i),
+            RedisValue::String(b) => serializer.serialize_bytes(b),
+            RedisValue::List(list) => {
+                let mut seq = serializer.serialize_seq(Some(list.len() + 1))?;
+                seq.serialize_element(&1)?;
+                for item in list {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            RedisValue::Hash(hash) => {
+                let mut map = serializer.serialize_map(Some(hash.len()))?;
+                // not using par_iter bc serde isn't threadsafe
+                for entry in hash.iter() {
+                    map.serialize_entry(entry.key(), entry.value())?;
+                }
+                map.end()
+            }
+            RedisValue::Set(set) => {
+                let mut seq = serializer.serialize_seq(Some(set.len() + 1))?;
+                seq.serialize_element(&2)?;
+                for item in set.iter() {
+                    seq.serialize_element(&*item)?;
+                }
+                seq.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RedisValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RedisValueVisitor;
+        impl<'de> Visitor<'de> for RedisValueVisitor {
+            type Value = RedisValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("Redis Value, any of: Integer, String, Hash, List, Set.")
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RedisValue::Integer(v))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v <= i64::MAX as u64 {
+                    Ok(RedisValue::Integer(v as i64))
+                } else {
+                    Err(Error::custom("u64 out of range for Integer"))
+                }
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                Ok(RedisValue::String(Bytes::from((*v).to_owned())))
+            }
+
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                Ok(RedisValue::String(Bytes::from(v)))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                Ok(RedisValue::String(Bytes::from(v.to_string())))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                match seq.next_element::<i32>()? {
+                    Some(2) => {
+                        // Set
+                        let set: DashSet<Bytes> = DashSet::new();
+                        while let Some(elem) = seq.next_element::<Vec<u8>>()? {
+                            set.insert(Bytes::from(elem));
+                        }
+                        Ok(RedisValue::Set(set))
+                    }
+                    _ => {
+                        // List
+                        let mut deque = VecDeque::new();
+                        while let Some(elem) = seq.next_element::<Vec<u8>>()? {
+                            deque.push_back(Bytes::from(elem));
+                        }
+                        Ok(RedisValue::List(deque))
+                    }
+                }
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let hash: DashMap<Bytes, Bytes> = DashMap::new();
+                while let Some(entry) = map.next_entry()? {
+                    hash.insert(entry.0, entry.1);
+                }
+                Ok(RedisValue::Hash(hash))
+            }
+        }
+
+        deserializer.deserialize_any(RedisValueVisitor)
+    }
+}
+
 impl RedisValue {
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             RedisValue::Integer(i) => Some(*i),
             RedisValue::String(s) => std::str::from_utf8(s).ok()?.parse().ok(),
             _ => None,
+        }
+    }
+}
+
+impl Serialize for DataEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.value);
+        match self.expiry {
+            Some(exp) => {
+                let now = Instant::now();
+                if now >= exp {
+                    tuple.serialize_element(&0u64)?;
+                } else {
+                    let remaining = exp - now;
+                    let total = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(serde::ser::Error::custom)?
+                        + remaining;
+                    // milliseconds since unix epoch
+                    tuple.serialize_element(&total.as_millis())?;
+                }
+            }
+            None => {
+                tuple.serialize_element(&0u64);
+            }
+        }
+        tuple.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DataEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DataEntryVisitor;
+
+        impl<'de> Visitor<'de> for DataEntryVisitor {
+            type Value = DataEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple of (value, expiry_timestamp)")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let value = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+                let expiry_secs: u128 = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+
+                let expiry = if expiry_secs == 0 {
+                    None
+                } else {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(de::Error::custom)?;
+
+                    if expiry_secs > now.as_millis() {
+                        let remaining = expiry_secs - now.as_millis();
+                        Some(
+                            Instant::now()
+                                + Duration::from_millis(remaining.min(u64::MAX as u128) as u64),
+                        )
+                    } else {
+                        // Already expired
+                        None
+                    }
+                };
+
+                Ok(DataEntry { value, expiry })
+            }
+        }
+
+        deserializer.deserialize_tuple(2, DataEntryVisitor)
+    }
+}
+
+impl DataEntry {
+    pub fn clone(&self) -> Self {
+        DataEntry {
+            value: self.value.clone(),
+            expiry: self.expiry.clone(),
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.is_older_than(Instant::now())
+    }
+
+    fn is_older_than(&self, instant: Instant) -> bool {
+        if let Some(exp) = self.expiry {
+            exp < instant
+        } else {
+            false
         }
     }
 }
