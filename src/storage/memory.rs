@@ -4,8 +4,8 @@ use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
 use regex::bytes::Regex;
-use serde::de::{self, Error, SeqAccess, Visitor};
-use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple};
+use serde::de::{self, Error, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
 use std::fmt;
@@ -27,6 +27,10 @@ pub struct StorageEngine {
 #[derive(Serialize, Deserialize)]
 pub struct DataEntry {
     pub value: RedisValue,
+    #[serde(
+        serialize_with = "serialize_expiry",
+        deserialize_with = "deserialize_expiry"
+    )]
     pub expiry: Option<Instant>,
 }
 
@@ -58,6 +62,50 @@ where
 {
     let map = DashMap::<Bytes, DataEntry, RandomState>::deserialize(deserializer)?;
     Ok(Arc::new(map))
+}
+
+fn serialize_expiry<S>(expiry: &Option<Instant>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match *expiry {
+        Some(exp) => {
+            let now = Instant::now();
+            if now >= exp {
+                serializer.serialize_u128(0)
+            } else {
+                let remaining = exp - now;
+                let total = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(serde::ser::Error::custom)?
+                    + remaining;
+                serializer.serialize_u128(total.as_millis())
+            }
+        }
+        None => serializer.serialize_u128(0),
+    }
+}
+
+fn deserialize_expiry<'de, D>(deserializer: D) -> Result<Option<Instant>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let millis = u128::deserialize(deserializer)?;
+    if millis == 0 {
+        return Ok(None);
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(de::Error::custom)?;
+    let expiry_duration = Duration::from_millis(millis as u64);
+
+    if expiry_duration > now {
+        let remaining = expiry_duration - now;
+        Ok(Some(Instant::now() + remaining))
+    } else {
+        Ok(None)
+    }
 }
 
 impl Serialize for RedisValue {
@@ -195,89 +243,6 @@ impl RedisValue {
             RedisValue::String(s) => std::str::from_utf8(s).ok()?.parse().ok(),
             _ => None,
         }
-    }
-}
-
-impl Serialize for DataEntry {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut tuple = serializer.serialize_tuple(2)?;
-        tuple.serialize_element(&self.value);
-        match self.expiry {
-            Some(exp) => {
-                let now = Instant::now();
-                if now >= exp {
-                    tuple.serialize_element(&0u64)?;
-                } else {
-                    let remaining = exp - now;
-                    let total = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(serde::ser::Error::custom)?
-                        + remaining;
-                    // milliseconds since unix epoch
-                    tuple.serialize_element(&total.as_millis())?;
-                }
-            }
-            None => {
-                tuple.serialize_element(&0u64);
-            }
-        }
-        tuple.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for DataEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct DataEntryVisitor;
-
-        impl<'de> Visitor<'de> for DataEntryVisitor {
-            type Value = DataEntry;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a tuple of (value, expiry_timestamp)")
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let value = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-
-                let expiry_secs: u128 = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-
-                let expiry = if expiry_secs == 0 {
-                    None
-                } else {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(de::Error::custom)?;
-
-                    if expiry_secs > now.as_millis() {
-                        let remaining = expiry_secs - now.as_millis();
-                        Some(
-                            Instant::now()
-                                + Duration::from_millis(remaining.min(u64::MAX as u128) as u64),
-                        )
-                    } else {
-                        // Already expired
-                        None
-                    }
-                };
-
-                Ok(DataEntry { value, expiry })
-            }
-        }
-
-        deserializer.deserialize_tuple(2, DataEntryVisitor)
     }
 }
 
