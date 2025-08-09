@@ -1,12 +1,10 @@
 use crate::resp::{ParseError, RespValue};
-use crate::storage::memory::StorageEngine;
 use bytes::Buf;
 use bytes::BytesMut;
-use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::sync::Arc;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 #[derive(Debug, Error)]
 pub enum ConnectionError {
@@ -35,15 +33,13 @@ pub enum ConnectionError {
 pub struct Connection {
     stream: TcpStream,
     buffer: BytesMut,
-    db: Arc<StorageEngine>,
 }
 
 impl Connection {
-    pub fn new(db: Arc<StorageEngine>, stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream) -> Self {
         Connection {
             stream,
             buffer: BytesMut::new(),
-            db,
         }
     }
 
@@ -55,15 +51,14 @@ impl Connection {
                 Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
-            Err(_) => Err(ConnectionError::RespParse(
-                "Error reading buffer".to_string(),
-            )),
+            Err(e) => Err(ConnectionError::RespParse(e.to_string())),
         }
     }
 
-    fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
+    pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         let mut temp_ref = [0u8; 1024];
+        self.buffer.reserve(1024);
         loop {
             // try and parse self.buffer
             if let Some(frame) = self.parse_buffer()? {
@@ -71,7 +66,7 @@ impl Connection {
             }
 
             // if buffer is not ready yet
-            match self.stream.read(&mut temp_ref) {
+            match self.stream.read(&mut temp_ref).await {
                 Ok(0) => {
                     // nothing else sent
                     if self.buffer.is_empty() {
@@ -87,7 +82,7 @@ impl Connection {
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     // handle a non blocking stream (idk what this is)
-                    // todo
+                    // TODO
                     continue;
                 }
                 Err(e) => return Err(e.into()),
@@ -95,12 +90,13 @@ impl Connection {
         }
     }
 
-    pub fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
+    pub async fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
         let serialized = response.serialize();
         self.stream
             .write_all(&serialized)
+            .await
             .map_err(ConnectionError::Io)?;
-        self.stream.flush().map_err(ConnectionError::Io)?;
+        self.stream.flush().await.map_err(ConnectionError::Io)?;
         Ok(())
     }
 }
