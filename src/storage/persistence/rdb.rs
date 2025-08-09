@@ -4,17 +4,9 @@ use std::path::{Path, PathBuf};
 
 use bincode::config::Configuration;
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
-use thiserror::Error;
 
 use crate::storage::memory::StorageEngine;
-
-#[derive(Debug, Error)]
-pub enum PersistenceError {
-    #[error("IO error: {0}")]
-    IO(String),
-    #[error("Serialization error: {0}")]
-    Serialization(String),
-}
+use crate::storage::persistence::errors::PersistenceError;
 
 pub struct RDB {
     pub path: PathBuf,

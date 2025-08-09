@@ -4,6 +4,7 @@ pub mod storage {
     pub mod memory;
     pub mod persistence {
         pub mod aof;
+        pub mod errors;
         pub mod rdb;
     }
 }
