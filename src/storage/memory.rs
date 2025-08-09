@@ -5,11 +5,14 @@ use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
 use regex::bytes::Regex;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 pub struct StorageEngine {
-    data: DashMap<Bytes, DataEntry, ahash::RandomState>,
+    data: Arc<DashMap<Bytes, DataEntry, ahash::RandomState>>,
+    cancel_token: CancellationToken,
 }
 
 pub struct DataEntry {
@@ -58,17 +61,22 @@ pub enum IncrError {
 impl StorageEngine {
     pub fn with_capacity_and_shards(capacity: usize, shard_count: usize) -> Self {
         StorageEngine {
-            data: DashMap::with_capacity_and_hasher_and_shard_amount(
+            data: Arc::new(DashMap::with_capacity_and_hasher_and_shard_amount(
                 capacity,
                 RandomState::new(),
                 shard_count,
-            ),
+            )),
+            cancel_token: CancellationToken::new(),
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         StorageEngine {
-            data: DashMap::with_capacity_and_hasher(capacity, RandomState::new()),
+            data: Arc::new(DashMap::with_capacity_and_hasher(
+                capacity,
+                RandomState::new(),
+            )),
+            cancel_token: CancellationToken::new(),
         }
     }
 
@@ -238,5 +246,49 @@ impl StorageEngine {
                 }
             })
             .collect())
+    }
+
+    pub fn remove_expired(&self) {
+        self.data.retain(|_, entry| !entry.is_expired());
+    }
+
+    fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
+        data.retain(|_, entry| !entry.is_expired());
+    }
+
+    pub fn remove_expired_par(&self) {
+        // possibly faster for large dashmaps
+        let keys_to_remove: Vec<_> = self
+            .data
+            .par_iter()
+            .filter(|entry| entry.value().is_expired())
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in keys_to_remove {
+            self.data.remove(&key);
+        }
+    }
+
+    pub fn run_expiration_loop(&self) {
+        let child_token = self.cancel_token.child_token();
+        let data = Arc::clone(&self.data);
+
+        // starts active expiration in bg
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            while !child_token.is_cancelled() {
+                tokio::select! {
+                    _ = child_token.cancelled() => break,
+                    _ = interval.tick() => {
+                        Self::remove_expired_on(&data);
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn stop_expiration_loop(&self) {
+        self.cancel_token.cancel();
     }
 }
