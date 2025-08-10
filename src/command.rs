@@ -3,6 +3,7 @@ use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 
 #[derive(Debug)]
 pub enum Command {
@@ -70,11 +71,16 @@ pub enum Command {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseError {
+    #[error("Invalid command: {0}")]
     InvalidCommand(String),
+
+    #[error("Invalid arg count, expected: {expected}, got: {got}")]
     InvalidArgCount { expected: usize, got: usize },
+    #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("Invalid duration: {0}")]
     InvalidDuration(String),
 }
 

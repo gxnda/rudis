@@ -15,16 +15,8 @@ pub struct RDB {
 
 impl RDB {
     pub fn save(&self, storage: &StorageEngine) -> Result<(), PersistenceError> {
-        if self.path.is_dir() {
-            return Err(PersistenceError::IO(
-                "Path given is a directory".to_string(),
-            ));
-        }
-        let mut writer = BufWriter::new(
-            File::create(&self.path).map_err(|e| PersistenceError::IO(e.to_string()))?,
-        );
-        encode_into_std_write(storage, &mut writer, self.config)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+        let mut writer = BufWriter::new(File::create(&self.path)?);
+        encode_into_std_write(storage, &mut writer, self.config)?;
         Ok(())
     }
 
@@ -33,12 +25,6 @@ impl RDB {
     }
 
     pub fn new(path: &Path, config: Configuration) -> Result<Self, PersistenceError> {
-        if path.is_dir() {
-            return Err(PersistenceError::IO(
-                "Path given was a directory.".to_string(),
-            ));
-        }
-
         // overwrite existing
         Ok(RDB {
             path: path.to_path_buf(),
@@ -47,7 +33,7 @@ impl RDB {
     }
 
     pub fn load(path: &Path, config: &Configuration) -> Result<StorageEngine, PersistenceError> {
-        let file = File::open(path).map_err(|e| PersistenceError::IO(e.to_string()))?;
+        let file = File::open(path)?;
         let mut buf_reader = BufReader::new(file);
         decode_from_std_read(&mut buf_reader, *config)
             .map_err(|e| PersistenceError::Serialization(e.to_string()))

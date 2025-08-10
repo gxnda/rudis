@@ -98,7 +98,7 @@ where
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(de::Error::custom)?;
-    let expiry_duration = Duration::from_millis(millis as u64);
+    let expiry_duration = Duration::from_millis(millis.min(u64::MAX as u128) as u64);
 
     if expiry_duration > now {
         let remaining = expiry_duration - now;
