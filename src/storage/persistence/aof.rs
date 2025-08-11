@@ -1,8 +1,9 @@
 use std::{
-    fs::{File, OpenOptions},
-    io::{BufReader, Read, Write},
+    fs::File,
+    io::{BufReader, Read},
     path::PathBuf,
 };
+use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
 use crate::{
     command::Command,
@@ -14,6 +15,7 @@ pub struct AOF {
     path: PathBuf,
     reader: Option<BufReader<File>>,
     buffer: Vec<u8>,
+    write_mutex: Mutex<()>,
 }
 
 impl AOF {
@@ -22,6 +24,7 @@ impl AOF {
             path,
             reader: None,
             buffer: Vec::new(),
+            write_mutex: Mutex::new(()),
         }
     }
 
@@ -33,22 +36,26 @@ impl AOF {
         Ok(())
     }
 
-    pub fn append_str(&self, resp_str: &str) -> Result<(), PersistenceError> {
+    pub async fn append_str(&self, resp_str: &str) -> Result<(), PersistenceError> {
         // resp_str is not checked if it is valid.
         let mut file = OpenOptions::new()
             .write(true)
             .append(true)
-            .open(&self.path)?;
-        write!(file, "{}", resp_str)?;
+            .open(&self.path)
+            .await?;
+        file.write_all(resp_str.as_bytes()).await?;
         Ok(())
     }
-    pub fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
+
+    pub async fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
+        let _lock = self.write_mutex.lock().await;
         let mut file = OpenOptions::new()
             .write(true)
             .append(true)
-            .open(&self.path)?;
-        let serialized: String = String::from_utf8(resp_command.serialize())?;
-        write!(file, "{}", serialized)?;
+            .open(&self.path)
+            .await?;
+        let bytes = resp_command.serialize();
+        file.write_all(&bytes).await?;
         Ok(())
     }
 

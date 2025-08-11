@@ -1,6 +1,8 @@
 use crate::resp::{ParseError, RespValue};
+use crate::storage::persistence::aof::AOF;
 use bytes::Buf;
 use bytes::BytesMut;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
@@ -29,29 +31,41 @@ pub enum ConnectionError {
 
     #[error("Server error: {0}")]
     Server(String),
+
+    #[error("Error attempting to write to AOF for backups: {0}")]
+    AofError(String),
 }
 
 pub struct Connection<S> {
     stream: S,
     buffer: BytesMut,
+    aof: Option<Arc<AOF>>,
 }
 
 impl<S> Connection<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    pub fn new(stream: S) -> Self {
+    pub fn new(stream: S, aof: Option<Arc<AOF>>) -> Self {
         Connection {
             stream,
             buffer: BytesMut::new(),
+            aof,
         }
     }
 
-    fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        let buf = self.buffer.as_ref();
-        println!("Parsed: {:?}", RespValue::parse(buf));
+    async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
+        let buf: &[u8] = self.buffer.as_ref();
         match RespValue::parse(buf) {
             Ok((resp, consumed)) => {
+                if let Some(aof) = &self.aof {
+                    aof.append_str(
+                        str::from_utf8(buf)
+                            .map_err(|e| ConnectionError::AofError(e.to_string()))?,
+                    )
+                    .await
+                    .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+                }
                 self.buffer.advance(consumed.len()); // done with these bytes now, they're boring
                 Ok(Some(resp))
             }
@@ -66,7 +80,7 @@ where
         let mut temp_ref = [0u8; 1024];
         self.buffer.reserve(1024);
         // try and parse self.buffer
-        if let Some(frame) = self.parse_buffer()? {
+        if let Some(frame) = self.parse_buffer().await? {
             return Ok(Some(frame));
         }
 
@@ -84,8 +98,8 @@ where
             Ok(Ok(n)) => {
                 // add read data to buffer
                 self.buffer.extend_from_slice(&temp_ref[..n]);
-                return self.parse_buffer(); // uses recursion instead of while loop to stop
-                                            // timeout on incomplete commands
+                return self.parse_buffer().await; // uses recursion instead of while loop to stop
+                                                  // timeout on incomplete commands
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                 // handle a non blocking stream (idk what this is)
@@ -120,7 +134,7 @@ mod connection_tests {
     #[tokio::test]
     async fn test_read_simple_frame() {
         let (mut client, server) = duplex(1024);
-        let mut conn = Connection::new(server);
+        let mut conn = Connection::new(server, None);
 
         client.write_all(b"+OK\r\n").await.unwrap();
 
@@ -131,7 +145,7 @@ mod connection_tests {
     #[tokio::test]
     async fn test_read_incomplete_frame() {
         let (mut client, server) = duplex(1024);
-        let mut conn = Connection::new(server);
+        let mut conn = Connection::new(server, None);
 
         client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
 
@@ -152,7 +166,7 @@ mod connection_tests {
     #[tokio::test]
     async fn test_read_multiple_frames() {
         let (mut client, server) = duplex(1024);
-        let mut conn = Connection::new(server);
+        let mut conn = Connection::new(server, None);
 
         client
             .write_all(b"*1\r\n$3\r\nGET\r\n*1\r\n$3\r\nSET\r\n")
@@ -179,7 +193,7 @@ mod connection_tests {
     #[tokio::test]
     async fn test_write_response() {
         let (mut client, server) = duplex(1024);
-        let mut conn = Connection::new(server);
+        let mut conn = Connection::new(server, None);
 
         conn.write_response(RespValue::SimpleString("OK".into()))
             .await
@@ -193,7 +207,7 @@ mod connection_tests {
     #[tokio::test]
     async fn test_parse_error() {
         let (mut client, server) = duplex(1024);
-        let mut conn = Connection::new(server);
+        let mut conn = Connection::new(server, None);
 
         client.write_all(b"invalid\r\n").await.unwrap();
 

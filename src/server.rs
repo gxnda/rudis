@@ -1,9 +1,11 @@
+use std::path::Path;
 use std::{io, net::SocketAddr, sync::Arc};
 
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
+use crate::storage::persistence::aof::AOF;
 use crate::{
     command::{Command, ParseError},
     connection::{Connection, ConnectionError},
@@ -36,12 +38,14 @@ pub struct Server {
     listener: TcpListener,
     storage: Arc<StorageEngine>,
     shutdown_rx: oneshot::Receiver<()>,
+    aof: Arc<AOF>,
 }
 
 impl Server {
     pub async fn new(
         addr: SocketAddr,
         storage: Arc<StorageEngine>,
+        aof_location: &Path,
     ) -> Result<(Self, oneshot::Sender<()>), io::Error> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         Ok((
@@ -49,6 +53,7 @@ impl Server {
                 listener: TcpListener::bind(addr).await?,
                 storage,
                 shutdown_rx,
+                aof: Arc::new(AOF::new(aof_location.to_path_buf())),
             },
             shutdown_tx,
         ))
@@ -60,8 +65,9 @@ impl Server {
                 conn = self.listener.accept() => match conn {
                     Ok((stream, _)) => {
                         let storage = self.storage.clone();
+                        let aof = self.aof.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_connection(stream, storage).await {
+                            if let Err(e) = Self::handle_connection(stream, storage, aof).await {
                                 eprintln!("Connection error: {e}")
                             }
                         });
@@ -78,8 +84,9 @@ impl Server {
     async fn handle_connection(
         stream: TcpStream,
         storage: Arc<StorageEngine>,
+        aof: Arc<AOF>,
     ) -> Result<(), ServerError> {
-        let mut conn = Connection::new(stream);
+        let mut conn = Connection::new(stream, Some(aof));
         loop {
             match conn.read_frame().await {
                 Ok(Some(resp)) => {
