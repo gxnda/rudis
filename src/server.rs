@@ -1,11 +1,12 @@
 use std::path::Path;
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use crate::storage::persistence::aof::AOF;
+use crate::storage::persistence::errors::PersistenceError;
 use crate::{
     command::{Command, ParseError},
     connection::{Connection, ConnectionError},
@@ -46,14 +47,14 @@ impl Server {
         addr: SocketAddr,
         storage: Arc<StorageEngine>,
         aof_location: &Path,
-    ) -> Result<(Self, oneshot::Sender<()>), io::Error> {
+    ) -> Result<(Self, oneshot::Sender<()>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         Ok((
             Server {
                 listener: TcpListener::bind(addr).await?,
                 storage,
                 shutdown_rx,
-                aof: Arc::new(AOF::new(aof_location.to_path_buf())),
+                aof: Arc::new(AOF::new(aof_location.to_path_buf()).await?),
             },
             shutdown_tx,
         ))

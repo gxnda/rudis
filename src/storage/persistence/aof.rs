@@ -15,17 +15,22 @@ pub struct AOF {
     path: PathBuf,
     reader: Option<BufReader<File>>,
     buffer: Vec<u8>,
-    write_mutex: Mutex<()>,
+    write_mutex: Mutex<Option<tokio::fs::File>>,
 }
 
 impl AOF {
-    pub fn new(path: PathBuf) -> Self {
-        AOF {
+    pub async fn new(path: PathBuf) -> Result<Self, PersistenceError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+        Ok(AOF {
             path,
             reader: None,
             buffer: Vec::new(),
-            write_mutex: Mutex::new(()),
-        }
+            write_mutex: Mutex::new(Some(file)),
+        })
     }
 
     pub fn ensure_reader(&mut self) -> Result<(), PersistenceError> {
@@ -36,26 +41,44 @@ impl AOF {
         Ok(())
     }
 
+    pub fn reset_reader(&mut self) -> Result<(), PersistenceError> {
+        self.reader = None;
+        self.buffer.clear();
+        self.ensure_reader()
+    }
+
     pub async fn append_str(&self, resp_str: &str) -> Result<(), PersistenceError> {
         // resp_str is not checked if it is valid.
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(&self.path)
-            .await?;
-        file.write_all(resp_str.as_bytes()).await?;
+        let mut file_guard = self.write_mutex.lock().await;
+        if file_guard.is_none() {
+            *file_guard = Some(
+                OpenOptions::new()
+                    .write(true)
+                    .append(true)
+                    .open(&self.path)
+                    .await?,
+            );
+        }
+        let file = file_guard.as_mut().unwrap();
+        file.write_all(&resp_str.as_bytes()).await?;
+        file.flush().await?; // basically saves the file
         Ok(())
     }
 
     pub async fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
-        let _lock = self.write_mutex.lock().await;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(&self.path)
-            .await?;
-        let bytes = resp_command.serialize();
-        file.write_all(&bytes).await?;
+        let mut file_guard = self.write_mutex.lock().await;
+        if file_guard.is_none() {
+            *file_guard = Some(
+                OpenOptions::new()
+                    .write(true)
+                    .append(true)
+                    .open(&self.path)
+                    .await?,
+            );
+        }
+        let file = file_guard.as_mut().unwrap();
+        file.write_all(&resp_command.serialize()).await?;
+        file.flush().await?; // basically saves the file
         Ok(())
     }
 
@@ -93,13 +116,14 @@ impl AOF {
         }
     }
 
-    pub fn rewrite_storage(
+    pub fn replay_into_storage(
         &mut self,
         storage: StorageEngine,
     ) -> Result<StorageEngine, PersistenceError> {
         // set up storage
         storage.clear();
-        // loop through instructions applied to storage
+        self.reset_reader()?; // move reader back to the start
+                              // loop through instructions applied to storage
         loop {
             match self.parse_buffer()? {
                 Some(resp) => {
