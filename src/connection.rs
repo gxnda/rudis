@@ -214,4 +214,106 @@ mod connection_tests {
         let result = conn.read_frame().await;
         assert!(matches!(result, Err(ConnectionError::RespParse(_))));
     }
+
+    #[tokio::test]
+    async fn test_timeout() {
+        let (_client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+
+        // No data written to client
+        match conn.read_frame().await {
+            Err(ConnectionError::Timeout) => {} // Expected
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clean_disconnect() {
+        let (client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+        drop(client); // Close client end immediately
+
+        match conn.read_frame().await {
+            Ok(None) => {} // Expected clean disconnect
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_with_partial_command() {
+        let (mut client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+
+        client.write_all(b"*2\r\n$3\r\nGET\r\n$").await.unwrap();
+        drop(client); // Disconnect after partial command
+
+        // First read: partial command -> None
+        assert!(conn.read_frame().await.unwrap().is_none());
+
+        // Second read: detects disconnect with partial buffer
+        match conn.read_frame().await {
+            Err(ConnectionError::Disconnected) => {} // Expected
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multiple_commands_in_single_read() {
+        let (mut client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+
+        // Corrected test data - ensure commands are properly framed
+        client
+            .write_all(b"*1\r\n$4\r\nCMD1\r\n*1\r\n$4\r\nCMD2\r\n")
+            .await
+            .unwrap();
+
+        let frame1 = conn.read_frame().await.unwrap();
+        assert_eq!(
+            frame1,
+            Some(RespValue::Array(Some(vec![RespValue::BulkString(Some(
+                Bytes::from("CMD1")
+            ))])))
+        );
+
+        let frame2 = conn.read_frame().await.unwrap();
+        assert_eq!(
+            frame2,
+            Some(RespValue::Array(Some(vec![RespValue::BulkString(Some(
+                Bytes::from("CMD2")
+            ))])))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_large_command() {
+        let (mut client, server) = duplex(4096);
+        let mut conn = Connection::new(server, None);
+
+        let large_value = vec![b'a'; 2048];
+        let cmd = format!(
+            "*2\r\n$3\r\nSET\r\n${}\r\n{}\r\n",
+            large_value.len(),
+            String::from_utf8_lossy(&large_value)
+        );
+
+        client.write_all(cmd.as_bytes()).await.unwrap();
+
+        // Loop until we get the complete frame
+        let frame = loop {
+            match conn.read_frame().await {
+                Ok(Some(frame)) => break frame,
+                Ok(None) => continue,
+                Err(e) => panic!("Unexpected error: {:?}", e),
+            }
+        };
+        match frame {
+            RespValue::Array(Some(v)) => {
+                assert_eq!(v.len(), 2);
+                assert_eq!(v[0], RespValue::BulkString(Some(Bytes::from("SET"))));
+                assert_eq!(v[1], RespValue::BulkString(Some(Bytes::from(large_value))));
+            }
+            other => panic!("Unexpected frame: {:?}", other),
+        }
+    }
 }
