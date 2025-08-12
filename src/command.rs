@@ -401,6 +401,140 @@ impl Command {
         }
     }
 
+    pub fn to_resp(&self) -> RespValue {
+        match self {
+            Command::Invalid { message } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("INVALID")))];
+                if let Some(msg) = message {
+                    array.push(RespValue::BulkString(Some(msg.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::Get { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("GET"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+            Command::Set { key, value, ttl } => {
+                let mut array = vec![
+                    RespValue::BulkString(Some(Bytes::from("SET"))),
+                    RespValue::BulkString(Some(key.clone())),
+                    RespValue::BulkString(Some(value.clone())),
+                ];
+                if let Some(expire) = ttl {
+                    let now = Instant::now();
+                    let millis = if *expire > now {
+                        expire.duration_since(now).as_millis() as u64
+                    } else {
+                        0
+                    };
+                    array.push(RespValue::BulkString(Some(Bytes::from("PX"))));
+                    array.push(RespValue::BulkString(Some(Bytes::from(millis.to_string()))));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::Del { keys } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("DEL")))];
+                for key in keys {
+                    array.push(RespValue::BulkString(Some(key.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::Exists { keys } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("EXISTS")))];
+                for key in keys {
+                    array.push(RespValue::BulkString(Some(key.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::Incr { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("INCR"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+            Command::Decr { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("DECR"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+            Command::Ping { message } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("PING")))];
+                if let Some(msg) = message {
+                    array.push(RespValue::BulkString(Some(msg.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::Echo { message } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("ECHO"))),
+                RespValue::BulkString(Some(message.clone())),
+            ])),
+            Command::FlushAll {} => RespValue::Array(Some(vec![RespValue::BulkString(Some(
+                Bytes::from("FLUSHALL"),
+            ))])),
+            Command::Keys { pattern } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("KEYS"))),
+                RespValue::BulkString(Some(Bytes::from((*pattern).clone()))),
+            ])),
+            Command::TTL { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("TTL"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+            Command::Expire { key, ttl } => {
+                let seconds = ttl.as_secs();
+                RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("EXPIRE"))),
+                    RespValue::BulkString(Some(key.clone())),
+                    RespValue::BulkString(Some(Bytes::from(seconds.to_string()))),
+                ]))
+            }
+            Command::Persist { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("PERSIST"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+            Command::LPush { key, elements } => {
+                let mut array = vec![
+                    RespValue::BulkString(Some(Bytes::from("LPUSH"))),
+                    RespValue::BulkString(Some(key.clone())),
+                ];
+                for element in elements {
+                    array.push(RespValue::BulkString(Some(element.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::RPush { key, elements } => {
+                let mut array = vec![
+                    RespValue::BulkString(Some(Bytes::from("RPUSH"))),
+                    RespValue::BulkString(Some(key.clone())),
+                ];
+                for element in elements {
+                    array.push(RespValue::BulkString(Some(element.clone())));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::LPop { key, count } => {
+                let mut array = vec![
+                    RespValue::BulkString(Some(Bytes::from("LPOP"))),
+                    RespValue::BulkString(Some(key.clone())),
+                ];
+                if let Some(count) = count {
+                    array.push(RespValue::BulkString(Some(Bytes::from(count.to_string()))));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::RPop { key, count } => {
+                let mut array = vec![
+                    RespValue::BulkString(Some(Bytes::from("RPOP"))),
+                    RespValue::BulkString(Some(key.clone())),
+                ];
+                if let Some(count) = count {
+                    array.push(RespValue::BulkString(Some(Bytes::from(count.to_string()))));
+                }
+                RespValue::Array(Some(array))
+            }
+            Command::LLen { key } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("LLEN"))),
+                RespValue::BulkString(Some(key.clone())),
+            ])),
+        }
+    }
+
     pub fn execute(&self, storage: &StorageEngine) -> RespValue {
         match self {
             Command::Invalid { message: _ } => RespValue::Error("Invalid message: ".to_string()),
