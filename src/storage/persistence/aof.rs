@@ -41,7 +41,7 @@ impl AOF {
         Ok(())
     }
 
-    pub fn reset_reader(&mut self) -> Result<(), PersistenceError> {
+    pub fn reset_reader_and_buffer(&mut self) -> Result<(), PersistenceError> {
         self.reader = None;
         self.buffer.clear();
         self.ensure_reader()
@@ -87,9 +87,10 @@ impl AOF {
         let reader = self.reader.as_mut().unwrap();
         loop {
             match RespValue::parse(&self.buffer) {
-                Ok((resp, consumed)) => {
+                Ok((resp, bytes_remaining)) => {
                     // if it's successful, remove the bit we read from the buffer
-                    self.buffer.drain(..consumed.len());
+                    let consumed = self.buffer.len() - bytes_remaining.len();
+                    self.buffer.drain(..consumed); // consumed is &[u8]
                     return Ok(Some(resp));
                 }
                 Err(ParseError::Incomplete) => {
@@ -97,21 +98,27 @@ impl AOF {
                     let mut chunk = [0; 1024];
                     match reader.read(&mut chunk) {
                         Ok(0) => {
-                            return if self.buffer.is_empty() {
-                                Ok(None)
+                            if self.buffer.is_empty() {
+                                return Ok(None);
                             } else {
-                                let remnants = String::from_utf8(self.buffer.to_vec())?;
-                                Err(PersistenceError::IncompleteCommand(remnants))
-                            }
+                                return Err(PersistenceError::IncompleteCommand(
+                                    String::from_utf8_lossy(&self.buffer).to_string(),
+                                ));
+                            };
                         }
                         Ok(n) => {
                             // get more
                             self.buffer.extend_from_slice(&chunk[..n]);
+                            continue;
                         }
-                        Err(e) => return Err(PersistenceError::from(e)),
+                        Err(e) => {
+                            return Err(PersistenceError::from(e));
+                        }
                     }
                 }
-                Err(e) => return Err(PersistenceError::from(e)),
+                Err(e) => {
+                    return Err(PersistenceError::from(e));
+                }
             }
         }
     }
@@ -122,19 +129,53 @@ impl AOF {
     ) -> Result<StorageEngine, PersistenceError> {
         // set up storage
         storage.clear();
-        self.reset_reader()?; // move reader back to the start
-                              // loop through instructions applied to storage
+        self.reset_reader_and_buffer()?; // move reader back to the start
+                                         // loop through instructions applied to storage
         loop {
             match self.parse_buffer()? {
                 Some(resp) => {
                     // apply to storage
-                    Command::from_resp(resp)?;
+                    let command: Command = Command::from_resp(resp)?;
+                    let _resp = command.execute(&storage);
                 }
                 None => {
                     // EOF
                     return Ok(storage);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_aof_logging() {
+        let dir = tempdir().unwrap();
+        let aof_path = dir.path().join("test.aof");
+        let mut aof = AOF::new(aof_path.clone()).await.unwrap(); // Remove Arc
+
+        let cmd = Command::Set {
+            key: Bytes::from(b"k".to_vec()),
+            value: Bytes::from(b"v".to_vec()),
+            ttl: None,
+        };
+        assert!(aof.append_command(cmd.to_resp()).await.is_ok());
+
+        // Verify AOF contains serialized command
+        let contents = tokio::fs::read(&aof_path).await.unwrap();
+        assert!(contents.starts_with(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n"));
+
+        let storage_to_use = StorageEngine::with_capacity(100);
+        match aof.replay_into_storage(storage_to_use) {
+            Ok(storage) => {
+                assert!(storage.get(&Bytes::from(b"k".to_vec())).is_some())
+            }
+            Err(e) => panic!("Unexpected error: {e}"),
         }
     }
 }
