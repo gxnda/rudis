@@ -65,7 +65,7 @@ impl AOF {
         Ok(())
     }
 
-    pub async fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
+    pub async fn append_command(&self, resp_command: &RespValue) -> Result<(), PersistenceError> {
         let mut file_guard = self.write_mutex.lock().await;
         if file_guard.is_none() {
             *file_guard = Some(
@@ -164,7 +164,7 @@ mod tests {
             value: Bytes::from(b"v".to_vec()),
             ttl: None,
         };
-        assert!(aof.append_command(cmd.to_resp()).await.is_ok());
+        assert!(aof.append_command(&cmd.to_resp()).await.is_ok());
 
         // Verify AOF contains serialized command
         let contents = tokio::fs::read(&aof_path).await.unwrap();

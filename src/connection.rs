@@ -60,6 +60,7 @@ where
             Ok((resp, consumed)) => {
                 if let Some(aof) = &self.aof {
                     aof.append_str(
+                        // adds to AOF only if valid
                         str::from_utf8(buf)
                             .map_err(|e| ConnectionError::AofError(e.to_string()))?,
                     )

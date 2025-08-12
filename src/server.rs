@@ -87,6 +87,7 @@ impl Server {
         storage: Arc<StorageEngine>,
         aof: Arc<AOF>,
     ) -> Result<(), ServerError> {
+        // all AOF is handled in parse_buffer of Connections
         let mut conn = Connection::new(stream, Some(aof));
         loop {
             match conn.read_frame().await {
