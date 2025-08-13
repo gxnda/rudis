@@ -69,6 +69,22 @@ pub enum Command {
     LLen {
         key: Bytes,
     },
+    Publish {
+        channel: Bytes,
+        message: Bytes,
+    },
+    Subscribe {
+        channels: Vec<Bytes>,
+    },
+    PSubscribe {
+        patterns: Vec<String>,
+    },
+    Unsubscribe {
+        channels: Vec<Bytes>,
+    },
+    PUnsubscribe {
+        patterns: Vec<String>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -396,6 +412,94 @@ impl Command {
                     key: arg_bytes[0].clone(),
                 })
             }
+            "PUBLISH" => {
+                if arg_bytes.len() < 2 {
+                    return Err(ParseError::InvalidArgCount {
+                        expected: 2,
+                        got: arg_bytes.len(),
+                    });
+                }
+                Ok(Command::Publish {
+                    channel: arg_bytes[0].clone(),
+                    message: arg_bytes[1].clone(),
+                })
+            }
+            "SUBSCRIBE" => match arg_bytes.len() {
+                0 => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: 0,
+                }),
+                1 => Ok(Command::Subscribe {
+                    channels: vec![arg_bytes[0].clone()],
+                }),
+                _ => Ok(Command::Subscribe {
+                    channels: arg_bytes.clone(),
+                }),
+            },
+            "PSUBSCRIBE" => match arg_bytes.len() {
+                0 => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: 0,
+                }),
+                1 => Ok(Command::PSubscribe {
+                    patterns: vec![std::str::from_utf8(&arg_bytes[0])
+                        .map_err(|_| ParseError::InvalidArgument("Invalid pattern".to_string()))?
+                        .to_string()],
+                }),
+                _ => {
+                    let patterns: Result<Vec<String>, ParseError> = arg_bytes
+                        .iter()
+                        .map(|arg| {
+                            std::str::from_utf8(arg)
+                                .map_err(|_| {
+                                    ParseError::InvalidArgument("Invalid pattern".to_string())
+                                })
+                                .map(|s| s.to_string())
+                        })
+                        .collect();
+                    Ok(Command::PSubscribe {
+                        patterns: patterns?,
+                    })
+                }
+            },
+            "UNSUBSCRIBE" => match arg_bytes.len() {
+                0 => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: 0,
+                }),
+                1 => Ok(Command::Unsubscribe {
+                    channels: vec![arg_bytes[0].clone()],
+                }),
+                _ => Ok(Command::Unsubscribe {
+                    channels: arg_bytes.clone(),
+                }),
+            },
+            "PUNSUBSCRIBE" => match arg_bytes.len() {
+                0 => Err(ParseError::InvalidArgCount {
+                    expected: 1,
+                    got: 0,
+                }),
+                1 => Ok(Command::PUnsubscribe {
+                    patterns: vec![std::str::from_utf8(&arg_bytes[0])
+                        .map_err(|_| ParseError::InvalidArgument("Invalid pattern".to_string()))?
+                        .to_string()],
+                }),
+                _ => {
+                    let patterns: Result<Vec<String>, ParseError> = arg_bytes
+                        .iter()
+                        .map(|arg| {
+                            std::str::from_utf8(arg)
+                                .map_err(|_| {
+                                    ParseError::InvalidArgument("Invalid pattern".to_string())
+                                })
+                                .map(|s| s.to_string())
+                        })
+                        .collect();
+                    Ok(Command::PUnsubscribe {
+                        patterns: patterns?,
+                    })
+                }
+            },
 
             _ => Err(ParseError::InvalidCommand(cmd)),
         }
@@ -532,6 +636,79 @@ impl Command {
                 RespValue::BulkString(Some(Bytes::from("LLEN"))),
                 RespValue::BulkString(Some(key.clone())),
             ])),
+            Command::Publish { channel, message } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("PUBLISH"))),
+                RespValue::BulkString(Some(channel.clone())),
+                RespValue::BulkString(Some(message.clone())),
+            ])),
+            Command::Subscribe { channels } => match channels.len() {
+                1 => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
+                    RespValue::BulkString(Some(channels[0])),
+                ])),
+                _ => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
+                    RespValue::Array(Some(
+                        channels
+                            .clone()
+                            .iter()
+                            .map(|channel| RespValue::BulkString(Some(channel.clone())))
+                            .collect(),
+                    )),
+                ])),
+            },
+            Command::PSubscribe { patterns } => match patterns.len() {
+                1 => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
+                    RespValue::BulkString(Some(Bytes::from(patterns[0]))),
+                ])),
+                _ => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
+                    RespValue::Array(Some(
+                        patterns
+                            .clone()
+                            .iter()
+                            .map(|pattern| {
+                                RespValue::BulkString(Some(Bytes::from(pattern.clone())))
+                            })
+                            .collect(),
+                    )),
+                ])),
+            },
+            Command::Unsubscribe { channels } => match channels.len() {
+                1 => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("UNSUBSCRIBE"))),
+                    RespValue::BulkString(Some(channels[0].clone())),
+                ])),
+                _ => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("UNSUBSCRIBE"))),
+                    RespValue::Array(Some(
+                        channels
+                            .clone()
+                            .iter()
+                            .map(|channel| RespValue::BulkString(Some(channel.clone())))
+                            .collect(),
+                    )),
+                ])),
+            },
+            Command::PUnsubscribe { patterns } => match patterns.len() {
+                1 => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("PUNSUBSCRIBE"))),
+                    RespValue::BulkString(Some(Bytes::from(patterns[0].clone()))),
+                ])),
+                _ => RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some(Bytes::from("PUNSUBSCRIBE"))),
+                    RespValue::Array(Some(
+                        patterns
+                            .clone()
+                            .iter()
+                            .map(|pattern| {
+                                RespValue::BulkString(Some(Bytes::from(pattern.clone())))
+                            })
+                            .collect(),
+                    )),
+                ])),
+            },
         }
     }
 
