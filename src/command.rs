@@ -644,7 +644,7 @@ impl Command {
             Command::Subscribe { channels } => match channels.len() {
                 1 => RespValue::Array(Some(vec![
                     RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
-                    RespValue::BulkString(Some(channels[0])),
+                    RespValue::BulkString(Some(channels[0].clone())),
                 ])),
                 _ => RespValue::Array(Some(vec![
                     RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
@@ -660,7 +660,7 @@ impl Command {
             Command::PSubscribe { patterns } => match patterns.len() {
                 1 => RespValue::Array(Some(vec![
                     RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
-                    RespValue::BulkString(Some(Bytes::from(patterns[0]))),
+                    RespValue::BulkString(Some(Bytes::from(patterns[0].clone()))),
                 ])),
                 _ => RespValue::Array(Some(vec![
                     RespValue::BulkString(Some(Bytes::from("SUBSCRIBE"))),
@@ -968,6 +968,8 @@ impl Command {
                     "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
                 ),
             },
+
+            _ => RespValue::Error("ERROR command not implemented yet.".to_string()),
         }
     }
 }
