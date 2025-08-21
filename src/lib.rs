@@ -12,3 +12,11 @@ pub mod command;
 pub mod config;
 pub mod connection;
 pub mod server;
+
+// for bin
+
+pub use command::Command;
+pub use config::Config;
+pub use resp::RespValue;
+pub use server::Server;
+pub use storage::memory;

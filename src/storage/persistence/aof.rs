@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{BufReader, Read},
-    path::PathBuf,
+    sync::Arc,
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
@@ -9,24 +9,25 @@ use crate::{
     command::Command,
     resp::{ParseError, RespValue},
     storage::{memory::StorageEngine, persistence::errors::PersistenceError},
+    Config,
 };
 
 pub struct AOF {
-    path: PathBuf,
+    config: Arc<Config>,
     reader: Option<BufReader<File>>,
     buffer: Vec<u8>,
     write_mutex: Mutex<Option<tokio::fs::File>>,
 }
 
 impl AOF {
-    pub async fn new(path: PathBuf) -> Result<Self, PersistenceError> {
+    pub async fn new(config: Arc<Config>) -> Result<Self, PersistenceError> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
+            .open(&config.aof_path)
             .await?;
         Ok(AOF {
-            path,
+            config: config,
             reader: None,
             buffer: Vec::new(),
             write_mutex: Mutex::new(Some(file)),
@@ -35,7 +36,7 @@ impl AOF {
 
     pub fn ensure_reader(&mut self) -> Result<(), PersistenceError> {
         if self.reader.is_none() {
-            let file = File::open(&self.path)?;
+            let file = File::open(&self.config.aof_path)?;
             self.reader = Some(BufReader::new(file));
         }
         Ok(())
@@ -55,7 +56,7 @@ impl AOF {
                 OpenOptions::new()
                     .write(true)
                     .append(true)
-                    .open(&self.path)
+                    .open(&self.config.aof_path)
                     .await?,
             );
         }
@@ -72,7 +73,7 @@ impl AOF {
                 OpenOptions::new()
                     .write(true)
                     .append(true)
-                    .open(&self.path)
+                    .open(&self.config.aof_path)
                     .await?,
             );
         }
@@ -156,8 +157,9 @@ mod tests {
     #[tokio::test]
     async fn test_aof_logging() {
         let dir = tempdir().unwrap();
-        let aof_path = dir.path().join("test.aof");
-        let mut aof = AOF::new(aof_path.clone()).await.unwrap(); // Remove Arc
+        let mut config: Config = Config::default();
+        config.aof_path = dir.path().join("test.aof");
+        let mut aof = AOF::new(Arc::new(config.clone())).await.unwrap(); // Remove Arc
 
         let cmd = Command::Set {
             key: Bytes::from(b"k".to_vec()),
@@ -167,7 +169,7 @@ mod tests {
         assert!(aof.append_command(&cmd.to_resp()).await.is_ok());
 
         // Verify AOF contains serialized command
-        let contents = tokio::fs::read(&aof_path).await.unwrap();
+        let contents = tokio::fs::read(&config.aof_path).await.unwrap();
         assert!(contents.starts_with(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n"));
 
         let storage_to_use = StorageEngine::with_capacity(100);

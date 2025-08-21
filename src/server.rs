@@ -1,12 +1,12 @@
-use std::path::Path;
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 
 use crate::storage::persistence::aof::AOF;
 use crate::storage::persistence::errors::PersistenceError;
+use crate::Config;
 use crate::{
     command::{Command, ParseError},
     connection::{Connection, ConnectionError},
@@ -39,22 +39,26 @@ pub struct Server {
     listener: TcpListener,
     storage: Arc<StorageEngine>,
     shutdown_rx: oneshot::Receiver<()>,
-    aof: Arc<AOF>,
+    aof: Option<Arc<AOF>>,
+    connection_semaphore: Arc<Semaphore>,
 }
 
 impl Server {
     pub async fn new(
-        addr: SocketAddr,
+        config: Arc<Config>,
         storage: Arc<StorageEngine>,
-        aof_location: &Path,
     ) -> Result<(Self, oneshot::Sender<()>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         Ok((
             Server {
-                listener: TcpListener::bind(addr).await?,
+                listener: TcpListener::bind(config.addr).await?,
                 storage,
                 shutdown_rx,
-                aof: Arc::new(AOF::new(aof_location.to_path_buf()).await?),
+                connection_semaphore: Arc::new(Semaphore::new(config.max_connections)),
+                aof: match config.aof_enabled {
+                    true => Some(Arc::new(AOF::new(config).await?)),
+                    false => None,
+                },
             },
             shutdown_tx,
         ))
@@ -65,12 +69,21 @@ impl Server {
             tokio::select! {
                 conn = self.listener.accept() => match conn {
                     Ok((stream, _)) => {
+                        let _permit = match self.connection_semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                eprintln!("Max connections reached, dropping connection");
+                                continue;
+                            }
+                        };
                         let storage = self.storage.clone();
                         let aof = self.aof.clone();
+                        // async move: it moves all variables into tokio, so permit is dropped when
+                        // it completes.
                         tokio::spawn(async move {
                             if let Err(e) = Self::handle_connection(stream, storage, aof).await {
-                                eprintln!("Connection error: {e}")
-                            }
+                                eprintln!("Connection error: {e}");
+                            };
                         });
                     }
                     Err(e) => eprintln!("Connection failed: {:?}", e),
@@ -85,10 +98,10 @@ impl Server {
     async fn handle_connection(
         stream: TcpStream,
         storage: Arc<StorageEngine>,
-        aof: Arc<AOF>,
+        aof: Option<Arc<AOF>>,
     ) -> Result<(), ServerError> {
         // all AOF is handled in parse_buffer of Connections
-        let mut conn = Connection::new(stream, Some(aof));
+        let mut conn = Connection::new(stream, aof);
         loop {
             match conn.read_frame().await {
                 Ok(Some(resp)) => {
