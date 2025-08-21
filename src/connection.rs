@@ -67,7 +67,7 @@ where
                     .await
                     .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
-                self.buffer.advance(consumed.len()); // done with these bytes now, they're boring
+                self.buffer.advance(buf.len() - consumed.len()); // done with these bytes now, they're boring
                 Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
@@ -79,10 +79,13 @@ where
         // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
         let mut temp_ref = [0u8; 1024];
-        self.buffer.reserve(1024);
-        // try and parse self.buffer
-        if let Some(frame) = self.parse_buffer().await? {
-            return Ok(Some(frame));
+
+        // if it's empty, it will timeout waiting for more data
+        if !self.buffer.is_empty() {
+            // try and parse self.buffer
+            if let Some(frame) = self.parse_buffer().await? {
+                return Ok(Some(frame));
+            }
         }
 
         // if buffer is not ready yet

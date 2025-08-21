@@ -164,9 +164,10 @@ impl RespValue {
             b':' => Self::parse_integer(&input[1..]),
             b'$' => Self::parse_bulk_string(&input[1..]),
             b'*' => Self::parse_array(&input[1..]),
-            _ => Err(ParseError::ByteError(
-                "Invalid prefix in RESP input".to_string(),
-            )),
+            other => Err(ParseError::ByteError(format!(
+                "Invalid prefix in RESP input: {}",
+                other
+            ))),
         }
     }
 
