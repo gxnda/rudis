@@ -18,7 +18,7 @@ pub struct Config {
     pub rdb_path: PathBuf,
 
     /// Enable AOF persistence
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub aof_enabled: bool,
 
     /// Path to the AOF file
