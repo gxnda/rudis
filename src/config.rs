@@ -19,7 +19,7 @@ pub struct Config {
 
     /// Enable AOF persistence
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub aof_enabled: bool,
+    pub aof: bool,
 
     /// Path to the AOF file
     #[arg(long, default_value = "./appendonly.aof")]
@@ -39,7 +39,7 @@ impl Default for Config {
         Self {
             addr: "127.0.0.1:6379".parse().unwrap(),
             aof_path: PathBuf::from("./appendonly.aof"),
-            aof_enabled: true,
+            aof: true,
             rdb_path: PathBuf::from("./dump.rdb"),
             max_connections: 100000,
             storage_init_size: 512,

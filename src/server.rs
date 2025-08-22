@@ -55,7 +55,7 @@ impl Server {
                 storage,
                 shutdown_rx,
                 connection_semaphore: Arc::new(Semaphore::new(config.max_connections)),
-                aof: match config.aof_enabled {
+                aof: match config.aof {
                     true => Some(Arc::new(AOF::new(config).await?)),
                     false => None,
                 },
