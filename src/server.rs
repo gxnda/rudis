@@ -21,7 +21,7 @@ pub enum ServerError {
     #[error("Connection error: {0}")]
     Connection(#[from] ConnectionError),
 
-    #[error("Parse Error")]
+    #[error("Parse Error: {0}")]
     Parse(ParseError),
 
     #[error("Error: {0}")]

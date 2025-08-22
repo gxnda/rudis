@@ -959,10 +959,7 @@ impl Command {
             },
 
             Command::LLen { key } => match storage.get(key) {
-                Some(RedisValue::List(arr)) => {
-                    println!("{:?}", arr);
-                    RespValue::Integer(arr.len() as i64)
-                }
+                Some(RedisValue::List(arr)) => RespValue::Integer(arr.len() as i64),
                 None => RespValue::Integer(0),
                 _ => RespValue::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),

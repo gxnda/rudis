@@ -54,6 +54,7 @@ impl RespValue {
         matches!(self, RespValue::Error(_))
     }
 
+    /// Neither side includes the CRLF at the end of the command.
     fn parse_until_crlf(input: &[u8]) -> Result<(&[u8], &[u8]), ParseError> {
         let mut end = 0;
         while end + 1 < input.len() {
@@ -153,6 +154,26 @@ impl RespValue {
         })
     }
 
+    fn parse_inline(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
+        Self::parse_until_crlf(input).and_then(|(s, rest)| {
+            if s.contains(&b' ') {
+                return Err(ParseError::ByteError(
+                    format!(
+                        "Inline command contains a space: {}",
+                        str::from_utf8(&s).unwrap_or("Error parsing command")
+                    )
+                    .to_string(),
+                ));
+            }
+            Ok((
+                RespValue::Array(
+                    vec![RespValue::BulkString(Some(Bytes::copy_from_slice(s)))].into(),
+                ),
+                rest,
+            ))
+        })
+    }
+
     pub fn parse(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         if input.is_empty() {
             return Err(ParseError::Incomplete);
@@ -164,10 +185,7 @@ impl RespValue {
             b':' => Self::parse_integer(&input[1..]),
             b'$' => Self::parse_bulk_string(&input[1..]),
             b'*' => Self::parse_array(&input[1..]),
-            _ => Err(ParseError::ByteError(format!(
-                "Invalid prefix in RESP input: {:?}",
-                str::from_utf8(&input).unwrap_or("cannot parse string")
-            ))),
+            _ => Self::parse_inline(input),
         }
     }
 
@@ -358,8 +376,8 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_start_byte() {
-        let input = b"xinvalid\r\n";
+    fn test_invalid_inline() {
+        let input = b"PING Hi\r\n";
         let result = RespValue::parse(input);
         assert!(result.is_err());
     }
@@ -405,6 +423,18 @@ mod tests {
         let input = b"*2\r\n:1\r\n";
         let result = RespValue::parse(input);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ok_inline_array() {
+        let input = b"PING\r\n";
+        let result = RespValue::parse(input);
+        assert!(result.is_ok());
+        let (inline_ping, _) = result.unwrap();
+        assert_eq!(
+            inline_ping,
+            RespValue::Array(vec![RespValue::BulkString(Some(Bytes::from("PING")))].into())
+        );
     }
 
     #[test]

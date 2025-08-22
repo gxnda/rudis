@@ -110,7 +110,7 @@ where
                 return Ok(None);
             }
             Ok(Err(e)) => {
-                println!("Error: {:?}", e);
+                eprintln!("Error: {:?}", e);
                 return Err(e.into());
             }
             Err(_elapsed) => return Err(ConnectionError::Timeout),
@@ -213,7 +213,7 @@ mod connection_tests {
         let (mut client, server) = duplex(1024);
         let mut conn = Connection::new(server, None);
 
-        client.write_all(b"invalid\r\n").await.unwrap();
+        client.write_all(b"invalid inline\r\n").await.unwrap();
 
         let result = conn.read_frame().await;
         assert!(matches!(result, Err(ConnectionError::RespParse(_))));
