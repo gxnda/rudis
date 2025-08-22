@@ -1,7 +1,6 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -835,12 +834,13 @@ impl Command {
                     storage.alter(key, |_, val| match val.value {
                         RedisValue::List(mut list) => {
                             len = list.len() + elements.len();
-                            let mut new_elements = VecDeque::with_capacity(elements.len());
-                            new_elements.extend(elements.iter().rev().cloned());
-                            new_elements.append(&mut list);
+                            list.reserve(elements.len());
+                            for item in elements.iter().rev() {
+                                list.push_front(item.clone());
+                            }
 
                             DataEntry {
-                                value: RedisValue::List(new_elements),
+                                value: RedisValue::List(list),
                                 expiry: val.expiry,
                             }
                         }
