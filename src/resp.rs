@@ -166,7 +166,7 @@ impl RespValue {
             b'*' => Self::parse_array(&input[1..]),
             _ => Err(ParseError::ByteError(format!(
                 "Invalid prefix in RESP input: {:?}",
-                str::from_utf8(&input)
+                str::from_utf8(&input).unwrap_or("cannot parse string")
             ))),
         }
     }
