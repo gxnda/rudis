@@ -1,6 +1,7 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use bytes::Bytes;
+use std::iter::Iterator;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -902,61 +903,52 @@ impl Command {
                 }
             }
 
-            Command::LPop { key, count } => match storage.get(key) {
-                Some(RedisValue::List(_)) => match count {
-                    Some(count) => {
-                        let mut popped = vec![];
-                        storage.alter(key, |_, mut val| {
-                            if let RedisValue::List(list) = &mut val.value {
-                                for _ in 0..(*count).min(list.len() as u64) {
-                                    popped.push(RespValue::BulkString(list.pop_front()));
-                                }
-                            }
-                            val
-                        });
-                        RespValue::Array(Some(popped))
-                    }
-                    None => {
-                        let mut result = RespValue::BulkString(None);
-                        storage.alter(key, |_, mut val| {
-                            if let RedisValue::List(list) = &mut val.value {
-                                result = RespValue::BulkString(list.pop_front());
-                            }
-                            val
-                        });
-                        result
-                    }
-                },
-                _ => RespValue::BulkString(None),
-            },
+            Command::LPop { key, count } => {
+                let mut result = RespValue::BulkString(None);
+                storage.alter(key, |_, mut val| {
+                    if let RedisValue::List(list) = &mut val.value {
+                        match count {
+                            Some(count) => {
+                                let num_to_take = (*count).min(list.len() as u64) as usize;
+                                let popped = list
+                                    .drain(0..num_to_take)
+                                    .map(|b| RespValue::BulkString(Some(b)))
+                                    .collect();
 
-            Command::RPop { key, count } => match storage.get(key) {
-                Some(RedisValue::List(_)) => match count {
-                    Some(count) => {
-                        let mut popped = vec![];
-                        storage.alter(key, |_, mut val| {
-                            if let RedisValue::List(list) = &mut val.value {
-                                for _ in 0..(*count).min(list.len() as u64) {
+                                result = RespValue::Array(Some(popped));
+                            }
+                            None => {
+                                let popped = list.pop_front();
+                                result = RespValue::BulkString(popped);
+                            }
+                        }
+                    }
+                    val
+                });
+                result
+            }
+            Command::RPop { key, count } => {
+                let mut result = RespValue::BulkString(None);
+                storage.alter(key, |_, mut val| {
+                    if let RedisValue::List(list) = &mut val.value {
+                        match count {
+                            Some(count) => {
+                                let mut popped = vec![];
+                                let num_to_take = (*count).min(list.len() as u64) as usize;
+                                for _ in 0..num_to_take {
                                     popped.push(RespValue::BulkString(list.pop_back()));
                                 }
+                                result = RespValue::Array(Some(popped));
                             }
-                            val
-                        });
-                        RespValue::Array(Some(popped))
-                    }
-                    None => {
-                        let mut result = RespValue::BulkString(None);
-                        storage.alter(key, |_, mut val| {
-                            if let RedisValue::List(list) = &mut val.value {
+                            None => {
                                 result = RespValue::BulkString(list.pop_back());
                             }
-                            val
-                        });
-                        result
+                        }
                     }
-                },
-                _ => RespValue::BulkString(None),
-            },
+                    val
+                });
+                result
+            }
 
             Command::LLen { key } => match storage.get(key) {
                 Some(RedisValue::List(arr)) => RespValue::Integer(arr.len() as i64),
