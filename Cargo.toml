@@ -30,10 +30,3 @@ criterion = "0.5"
 rand = "0.8"
 lazy_static = "1.4"
 
-[[bench]]
-name = "key_bench"
-harness = false
-
-[[benches]]
-name = "key_bench"
-harness = false
