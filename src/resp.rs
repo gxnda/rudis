@@ -160,7 +160,7 @@ impl RespValue {
                 return Err(ParseError::ByteError(
                     format!(
                         "Inline command contains a space: {}",
-                        str::from_utf8(&s).unwrap_or("Error parsing command")
+                        str::from_utf8(s).unwrap_or("Error parsing command")
                     )
                     .to_string(),
                 ));

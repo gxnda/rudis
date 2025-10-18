@@ -246,14 +246,16 @@ impl RedisValue {
     }
 }
 
-impl DataEntry {
-    pub fn clone(&self) -> Self {
+impl Clone for DataEntry {
+    fn clone(&self) -> Self {
         DataEntry {
             value: self.value.clone(),
-            expiry: self.expiry.clone(),
+            expiry: self.expiry,
         }
     }
+}
 
+impl DataEntry {
     pub fn is_expired(&self) -> bool {
         self.is_older_than(Instant::now())
     }

@@ -94,9 +94,9 @@ where
                 // nothing else sent
                 if self.buffer.is_empty() {
                     // nothing else to look at
-                    return Ok(None);
+                    Ok(None)
                 } else {
-                    return Err(ConnectionError::Disconnected);
+                    Err(ConnectionError::Disconnected)
                 }
             }
             Ok(Ok(n)) => {
@@ -107,13 +107,13 @@ where
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                 // handle a non blocking stream (idk what this is)
-                return Ok(None);
+                Ok(None)
             }
             Ok(Err(e)) => {
                 eprintln!("Error: {:?}", e);
-                return Err(e.into());
+                Err(e.into())
             }
-            Err(_elapsed) => return Err(ConnectionError::Timeout),
+            Err(_elapsed) => Err(ConnectionError::Timeout),
         }
     }
 

@@ -27,7 +27,7 @@ impl AOF {
             .open(&config.aof_path)
             .await?;
         Ok(AOF {
-            config: config,
+            config,
             reader: None,
             buffer: Vec::new(),
             write_mutex: Mutex::new(Some(file)),
@@ -61,7 +61,7 @@ impl AOF {
             );
         }
         let file = file_guard.as_mut().unwrap();
-        file.write_all(&resp_str.as_bytes()).await?;
+        file.write_all(resp_str.as_bytes()).await?;
         file.flush().await?; // basically saves the file
         Ok(())
     }

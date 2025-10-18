@@ -106,7 +106,7 @@ impl Server {
             match conn.read_frame().await {
                 Ok(Some(resp)) => {
                     let cmd: Command =
-                        Command::from_resp(resp).map_err(|e| ServerError::Parse(e))?;
+                        Command::from_resp(resp).map_err(ServerError::Parse)?;
                     conn.write_response(cmd.execute(&storage)).await?;
                 }
                 Ok(None) => {

@@ -130,7 +130,7 @@ impl Command {
         let mut arg_bytes = Vec::with_capacity(args.len());
         for arg in args {
             match arg {
-                RespValue::BulkString(Some(s)) => arg_bytes.push(Bytes::from(s)),
+                RespValue::BulkString(Some(s)) => arg_bytes.push(s),
                 RespValue::BulkString(None) => {
                     return Err(ParseError::InvalidArgument(
                         "Null bulk string not allowed".to_string(),
@@ -867,11 +867,11 @@ impl Command {
             }
 
             Command::RPush { key, elements } => {
-                if storage.exists(&key) {
+                if storage.exists(key) {
                     let mut new_len = 0;
                     let mut type_error = false;
 
-                    storage.alter(&key, |_, val| match val.value {
+                    storage.alter(key, |_, val| match val.value {
                         RedisValue::List(mut list) => {
                             new_len = list.len() + elements.len();
                             list.extend(elements.iter().cloned());
