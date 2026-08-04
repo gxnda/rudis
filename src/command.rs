@@ -1,8 +1,10 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
+use atoi::atoi;
 use bytes::Bytes;
+use serde::Serialize;
 use std::iter::Iterator;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -233,7 +235,7 @@ impl Command {
                     });
                 }
                 Ok(Command::Incr {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
 
@@ -245,15 +247,20 @@ impl Command {
                     });
                 }
                 Ok(Command::Decr {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
 
             "PING" => {
-                let message = if arg_bytes.is_empty() {
-                    None
-                } else {
-                    Some(arg_bytes[0].clone())
+                let message = match arg_bytes.len() {
+                    0 => None,
+                    1 => Some(arg_bytes.remove(0)),
+                    _ => {
+                        return Err(ParseError::InvalidArgCount {
+                            expected: 1,
+                            got: arg_bytes.len(),
+                        })
+                    }
                 };
                 Ok(Command::Ping { message })
             }
@@ -266,7 +273,7 @@ impl Command {
                     });
                 }
                 Ok(Command::Echo {
-                    message: arg_bytes[0].clone(),
+                    message: arg_bytes.remove(0),
                 })
             }
 
@@ -281,6 +288,7 @@ impl Command {
             }
 
             "KEYS" => {
+                // TODO: Make correct, apparently this does not need to be UTF-8 and is inefficient
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -299,7 +307,7 @@ impl Command {
                     });
                 }
                 Ok(Command::TTL {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
 
@@ -310,13 +318,10 @@ impl Command {
                         got: arg_bytes.len(),
                     });
                 }
-                let key = arg_bytes[0].clone();
-                let seconds: u64 =
-                    String::from_utf8_lossy(&arg_bytes[1])
-                        .parse()
-                        .map_err(|_| {
-                            ParseError::InvalidDuration("Invalid expire seconds".to_string())
-                        })?;
+                let seconds: u64 = atoi::<u64>(&arg_bytes.pop().unwrap())
+                    .ok_or_else(|| ParseError::InvalidDuration("Invalid expire seconds".into()))?;
+                let key = arg_bytes.pop().unwrap();
+
                 Ok(Command::Expire {
                     key,
                     ttl: Duration::from_secs(seconds),
@@ -331,7 +336,7 @@ impl Command {
                     });
                 }
                 Ok(Command::Persist {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
 
@@ -354,23 +359,23 @@ impl Command {
                         got: arg_bytes.len(),
                     });
                 }
-                let key = arg_bytes[0].clone();
-                let elements = arg_bytes[1..].to_vec();
-                Ok(Command::RPush { key, elements })
+                let key = arg_bytes.remove(0);
+                Ok(Command::RPush {
+                    key,
+                    elements: arg_bytes,
+                })
             }
 
             "LPOP" => match arg_bytes.len() {
                 1 => Ok(Command::LPop {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                     count: None,
                 }),
                 2 => {
-                    let count = std::str::from_utf8(&arg_bytes[1])
-                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?
-                        .parse::<u64>()
-                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
+                    let count = atoi::<u64>(&arg_bytes.remove(1))
+                        .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?;
                     Ok(Command::LPop {
-                        key: arg_bytes[0].clone(),
+                        key: arg_bytes.remove(0),
                         count: Some(count),
                     })
                 }
@@ -382,16 +387,14 @@ impl Command {
 
             "RPOP" => match arg_bytes.len() {
                 1 => Ok(Command::RPop {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                     count: None,
                 }),
                 2 => {
-                    let count = std::str::from_utf8(&arg_bytes[1])
-                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?
-                        .parse::<u64>()
-                        .map_err(|_| ParseError::InvalidArgument("Invalid count".to_string()))?;
+                    let count = atoi::<u64>(&arg_bytes.remove(1))
+                        .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?;
                     Ok(Command::RPop {
-                        key: arg_bytes[0].clone(),
+                        key: arg_bytes.remove(0),
                         count: Some(count),
                     })
                 }
@@ -409,7 +412,7 @@ impl Command {
                     });
                 }
                 Ok(Command::LLen {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
             "PUBLISH" => {
@@ -420,8 +423,8 @@ impl Command {
                     });
                 }
                 Ok(Command::Publish {
-                    channel: arg_bytes[0].clone(),
-                    message: arg_bytes[1].clone(),
+                    message: arg_bytes.remove(1),
+                    channel: arg_bytes.remove(0),
                 })
             }
             "SUBSCRIBE" => match arg_bytes.len() {
@@ -429,22 +432,14 @@ impl Command {
                     expected: 1,
                     got: 0,
                 }),
-                1 => Ok(Command::Subscribe {
-                    channels: vec![arg_bytes[0].clone()],
-                }),
                 _ => Ok(Command::Subscribe {
-                    channels: arg_bytes.clone(),
+                    channels: arg_bytes,
                 }),
             },
             "PSUBSCRIBE" => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
-                }),
-                1 => Ok(Command::PSubscribe {
-                    patterns: vec![std::str::from_utf8(&arg_bytes[0])
-                        .map_err(|_| ParseError::InvalidArgument("Invalid pattern".to_string()))?
-                        .to_string()],
                 }),
                 _ => {
                     let patterns: Result<Vec<String>, ParseError> = arg_bytes
@@ -467,22 +462,14 @@ impl Command {
                     expected: 1,
                     got: 0,
                 }),
-                1 => Ok(Command::Unsubscribe {
-                    channels: vec![arg_bytes[0].clone()],
-                }),
                 _ => Ok(Command::Unsubscribe {
-                    channels: arg_bytes.clone(),
+                    channels: arg_bytes,
                 }),
             },
             "PUNSUBSCRIBE" => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
-                }),
-                1 => Ok(Command::PUnsubscribe {
-                    patterns: vec![std::str::from_utf8(&arg_bytes[0])
-                        .map_err(|_| ParseError::InvalidArgument("Invalid pattern".to_string()))?
-                        .to_string()],
                 }),
                 _ => {
                     let patterns: Result<Vec<String>, ParseError> = arg_bytes
