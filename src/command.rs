@@ -2,7 +2,6 @@ use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use atoi::atoi;
 use bytes::Bytes;
-use serde::Serialize;
 use std::iter::Iterator;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -18,7 +17,11 @@ pub enum Command {
     Set {
         key: Bytes,
         value: Bytes,
+        condition_type: Option<Bytes>,
+        condition_val: Option<Bytes>,
+        get: bool,
         ttl: Option<Instant>,
+        keep_ttl: bool,
     },
     Del {
         keys: Vec<Bytes>,
@@ -155,56 +158,137 @@ impl Command {
                     });
                 }
                 Ok(Command::Get {
-                    key: arg_bytes[0].clone(),
+                    key: arg_bytes.remove(0),
                 })
             }
             "SET" => {
+                // SET key value
+                // [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifdeq-digest | IFDNE ifdne-digest]
+                // [GET]
+                // [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | KEEPTTL]
                 if arg_bytes.len() < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
                         got: arg_bytes.len(),
                     });
                 }
-                let key = arg_bytes[0].clone();
-                let value = arg_bytes[1].clone();
+
+                let mut args = arg_bytes.into_iter();
+                let key = args.next().unwrap();
+                let value = args.next().unwrap();
+
                 let mut ttl = None;
+                let mut condition_type = None;
+                let mut condition_val = None;
+                let mut get = false;
+                let mut keep_ttl = false;
 
-                // Process optional TTL arguments
-                let mut i = 2;
-                while i < arg_bytes.len() {
-                    let opt_str = String::from_utf8_lossy(&arg_bytes[i]).to_uppercase();
-                    match opt_str.as_str() {
-                        "EX" | "PX" => {
-                            if i + 1 >= arg_bytes.len() {
-                                return Err(ParseError::InvalidArgument(format!(
-                                    "Missing value for {} option",
-                                    opt_str
-                                )));
+                while args.len() != 0 {
+                    match args.next() {
+                        None => unreachable!(),
+                        Some(arg) => {
+                            match arg.as_ref() {
+                                b"NX" | b"XX" => {
+                                    if condition_type.is_some() {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Condition options are mutually exclusive".into(),
+                                        ));
+                                    }
+                                    condition_type = Some(arg);
+                                    continue;
+                                }
+                                b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
+                                    if condition_type.is_some() {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Condition options are mutually exclusive".into(),
+                                        ));
+                                    }
+                                    condition_type = Some(arg);
+                                    if args.len() == 0 {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Expected value for condition".into(),
+                                        ));
+                                    }
+                                    condition_val = args.next();
+                                }
+                                b"GET" => {
+                                    if get == true {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Can't GET multiple times for one request".into(),
+                                        ));
+                                    }
+                                    get = true;
+                                }
+                                b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
+                                    if ttl.is_some() || keep_ttl {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Expiration options are mutually exclusive".into(),
+                                        ));
+                                    }
+                                    if args.len() == 0 {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Expected value for expiry".into(),
+                                        ));
+                                    }
+                                    let duration_val = atoi::<u64>(&args.next().unwrap())
+                                        .ok_or_else(|| {
+                                            ParseError::InvalidDuration(
+                                                "Invalid expire seconds".into(),
+                                            )
+                                        })?;
+                                    ttl = match arg.as_ref() {
+                                        b"EX" => {
+                                            Some(Instant::now() + Duration::from_secs(duration_val))
+                                        }
+                                        b"PX" => Some(
+                                            Instant::now() + Duration::from_millis(duration_val),
+                                        ),
+                                        b"EXAT" => {
+                                            // Absolute Unix timestamp in seconds
+                                            let absolute =
+                                                UNIX_EPOCH + Duration::from_secs(duration_val);
+                                            let remaining = absolute
+                                                .duration_since(SystemTime::now())
+                                                .unwrap_or(Duration::ZERO);
+                                            Some(Instant::now() + remaining)
+                                        }
+                                        b"PXAT" => {
+                                            let absolute =
+                                                UNIX_EPOCH + Duration::from_millis(duration_val);
+                                            Some(
+                                                Instant::now()
+                                                    + absolute
+                                                        .duration_since(SystemTime::now())
+                                                        .unwrap_or(Duration::ZERO),
+                                            )
+                                        }
+                                        _ => unreachable!(),
+                                    }
+                                }
+                                b"KEEPTTL" => {
+                                    if ttl.is_some() || keep_ttl {
+                                        return Err(ParseError::InvalidCommand(
+                                            "Expiration options are mutually exclusive".into(),
+                                        ));
+                                    }
+                                    keep_ttl = true;
+                                }
+                                _ => {
+                                    return Err(ParseError::InvalidCommand("Invalid syntax".into()))
+                                }
                             }
-                            let num_str = std::str::from_utf8(&arg_bytes[i + 1]).map_err(|_| {
-                                ParseError::InvalidArgument("Invalid UTF-8".to_string())
-                            })?;
-                            let duration_val = num_str.parse::<u64>().map_err(|_| {
-                                ParseError::InvalidDuration("Invalid duration value".to_string())
-                            })?;
-
-                            ttl = Some(match opt_str.as_str() {
-                                "EX" => Instant::now() + Duration::from_secs(duration_val),
-                                "PX" => Instant::now() + Duration::from_millis(duration_val),
-                                _ => unreachable!(),
-                            });
-                            i += 2; // Skip option and its value
-                        }
-                        _ => {
-                            return Err(ParseError::InvalidArgument(format!(
-                                "Unsupported option: {}",
-                                opt_str
-                            )))
                         }
                     }
                 }
-
-                Ok(Command::Set { key, value, ttl })
+                return Ok(Command::Set {
+                    key,
+                    value,
+                    ttl,
+                    condition_type,
+                    condition_val,
+                    get,
+                    keep_ttl,
+                });
             }
 
             "DEL" => {
@@ -505,7 +589,15 @@ impl Command {
                 RespValue::BulkString(Some(Bytes::from("GET"))),
                 RespValue::BulkString(Some(key.clone())),
             ])),
-            Command::Set { key, value, ttl } => {
+            Command::Set {
+                key,
+                value,
+                ttl,
+                condition_type,
+                condition_val,
+                keep_ttl,
+                get,
+            } => {
                 let mut array = vec![
                     RespValue::BulkString(Some(Bytes::from("SET"))),
                     RespValue::BulkString(Some(key.clone())),
@@ -520,6 +612,8 @@ impl Command {
                     };
                     array.push(RespValue::BulkString(Some(Bytes::from("PX"))));
                     array.push(RespValue::BulkString(Some(Bytes::from(millis.to_string()))));
+                } else if keep_ttl {
+                    array.push(RespValue::BulkString(Some(Bytes::from("KEEPTTL"))));
                 }
                 RespValue::Array(Some(array))
             }
@@ -714,10 +808,90 @@ impl Command {
                     ),
                 }
             }
-            Command::Set { key, value, ttl } => {
-                // ttl can be none, ONLY WORKS FOR STRINGS
-                storage.set(key.clone(), RedisValue::String(value.clone()), *ttl);
-                RespValue::SimpleString("OK".to_string())
+            Command::Set {
+                key,
+                value,
+                ttl,
+                condition_type,
+                condition_val,
+                keep_ttl,
+                get,
+            } => {
+                let mut do_operation: bool = true;
+
+                // check if it's a string
+                if let Some(existing) = storage.get(key) {
+                    if !matches!(existing, RedisValue::String(_)) {
+                        return RespValue::Error("WRONGTYPE".to_string());
+                    }
+                }
+
+                match condition_type.as_deref() {
+                    Some(b"NX") => do_operation = !storage.exists(key),
+                    Some(b"XX") => do_operation = storage.exists(key),
+                    Some(b"IFEQ") => {
+                        if !storage.exists(key) {
+                            do_operation = false;
+                        } else {
+                            if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
+                                do_operation = unwrapped
+                                    == condition_val.clone().unwrap_or(|_| -> return RespValue::Error("syntax error".to_string()));                            } else {
+                                // not a string! can't do SET on a non-string.
+                                // or there was not a previous value
+                                do_operation = false;
+                            }
+                        }
+                    }
+                    Some(b"IFNE") => {
+                        if !storage.exists(key) {
+                            do_operation = true;
+                        } else {
+                            if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
+                                do_operation = unwrapped
+                                    != condition_val.clone().expect("IFEQ must also have a value");
+                            } else {
+                                // not a string! can't do SET on a non-string.
+                                do_operation = false;
+                            }
+                        }
+                    }
+                    Some(b"IFDEQ") => {
+                        // TODO: Implement
+                        todo!()
+                    }
+                    Some(b"IFDNE") => {
+                        // TODO: Implement
+                        todo!()
+                    }
+                    Some(_) => unreachable!(),
+                    None => {}
+                }
+                let mut prev: Option<Bytes> = None;
+                if *get {
+                    prev = if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
+                        Some(unwrapped)
+                    } else {
+                        None
+                    };
+                }
+                if do_operation {
+                    let mut new_ttl: Option<Instant> = *ttl;
+                    if *keep_ttl {
+                        if let Ok(exp) = storage.get_expire(key) {
+                            new_ttl = exp;
+                        }
+                    }
+                    storage.set(key.clone(), RedisValue::String(value.clone()), new_ttl);
+                    if *get {
+                        RespValue::BulkString(prev)
+                    } else {
+                        RespValue::SimpleString("OK".to_string())
+                    }
+                } else if *get {
+                    RespValue::BulkString(prev)
+                } else {
+                    RespValue::BulkString(None)
+                }
             }
             Command::Del { keys } => {
                 let mut count = 0;

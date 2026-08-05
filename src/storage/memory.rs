@@ -34,7 +34,7 @@ pub struct DataEntry {
     pub expiry: Option<Instant>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum RedisValue {
     Integer(i64),
     String(Bytes),
@@ -312,7 +312,7 @@ impl StorageEngine {
     }
 
     pub fn set(&self, key: Bytes, value: RedisValue, expiry: Option<Instant>) {
-        self.data.insert(key, DataEntry { value, expiry });
+        self.data.insert(&key, DataEntry { value, expiry });
     }
 
     pub fn del(&self, key: &Bytes) -> bool {
