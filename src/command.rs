@@ -593,10 +593,10 @@ impl Command {
                 key,
                 value,
                 ttl,
-                condition_type,
-                condition_val,
+                condition_type: _,
+                condition_val: _,
                 keep_ttl,
-                get,
+                get: _,
             } => {
                 let mut array = vec![
                     RespValue::BulkString(Some(Bytes::from("SET"))),
