@@ -830,30 +830,22 @@ impl Command {
                     Some(b"NX") => do_operation = !storage.exists(key),
                     Some(b"XX") => do_operation = storage.exists(key),
                     Some(b"IFEQ") => {
-                        if !storage.exists(key) {
-                            do_operation = false;
-                        } else {
-                            if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
-                                do_operation = unwrapped
-                                    == condition_val.clone().unwrap_or(|_| -> return RespValue::Error("syntax error".to_string()));                            } else {
-                                // not a string! can't do SET on a non-string.
-                                // or there was not a previous value
-                                do_operation = false;
-                            }
-                        }
+                        let Some(condition_val) = condition_val else {
+                            return RespValue::Error("syntax error".to_string());
+                        };
+                        do_operation = matches!(
+                            storage.get(key),
+                            Some(RedisValue::String(unwrapped)) if unwrapped == condition_val
+                        );
                     }
                     Some(b"IFNE") => {
-                        if !storage.exists(key) {
-                            do_operation = true;
-                        } else {
-                            if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
-                                do_operation = unwrapped
-                                    != condition_val.clone().expect("IFEQ must also have a value");
-                            } else {
-                                // not a string! can't do SET on a non-string.
-                                do_operation = false;
-                            }
-                        }
+                        let Some(condition_val) = condition_val else {
+                            return RespValue::Error("syntax error".to_string());
+                        };
+                        do_operation = !matches!(
+                            storage.get(key),
+                            Some(RedisValue::String(unwrapped)) if unwrapped == condition_val
+                        );
                     }
                     Some(b"IFDEQ") => {
                         // TODO: Implement
