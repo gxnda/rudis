@@ -165,6 +165,10 @@ mod tests {
             key: Bytes::from(b"k".to_vec()),
             value: Bytes::from(b"v".to_vec()),
             ttl: None,
+            condition_type: None,
+            condition_val: None,
+            get: false,
+            keep_ttl: false,
         };
         assert!(aof.append_command(&cmd.to_resp()).await.is_ok());
 
