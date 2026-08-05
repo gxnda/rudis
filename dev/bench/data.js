@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785961818173,
+  "lastUpdate": 1785962416766,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Rudis Performance": [
@@ -171,6 +171,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 56561.09,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "b51c0bbfab208f99cb8d84210554c8685c8cc969",
+          "message": "chore: removed unused imports",
+          "timestamp": "2026-08-05T21:38:49+01:00",
+          "tree_id": "6cac59e86a82de65452979c8db58893ebe64b305",
+          "url": "https://github.com/gxnda/rudis/commit/b51c0bbfab208f99cb8d84210554c8685c8cc969"
+        },
+        "date": 1785962416480,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 59665.87,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 60459.49,
             "unit": "undefined"
           }
         ]
