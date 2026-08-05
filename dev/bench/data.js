@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785959883368,
+  "lastUpdate": 1785959931952,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -101,6 +101,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 56179.78,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "16b683c433aec72a9d776e280e77051fd5bc5b71",
+          "message": "perf: hopefully optimised parse_until_crlf in RESP using memchr::memmem",
+          "timestamp": "2026-08-05T20:57:35+01:00",
+          "tree_id": "935db3facb9b8e3a3411e4bf42bb1c63b1db4d99",
+          "url": "https://github.com/gxnda/rudis/commit/16b683c433aec72a9d776e280e77051fd5bc5b71"
+        },
+        "date": 1785959931080,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 58927.52,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 58719.91,
             "unit": "undefined"
           }
         ]
