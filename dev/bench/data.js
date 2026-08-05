@@ -2,7 +2,7 @@ window.BENCHMARK_DATA = {
   "lastUpdate": 1785959931952,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
-    "Redis Clone Performance": [
+    "Rudis Performance": [
       {
         "commit": {
           "author": {
