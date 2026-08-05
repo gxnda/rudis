@@ -31,14 +31,23 @@ jobs:
 
       - name: Run Benchmark
         run: |
-          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt
+          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt      - name: Convert benchmark to JSON
+
+      - name: Convert benchmark to JSON
+        run: |
+          echo '[' > benchmark.json
+          awk '/requests per second/ {
+            gsub(/:/, "", $1);
+            print "{\"name\":\"" $1 "\", \"value\": " $5 "},"
+          }' benchmark_output.txt | sed '$ s/,$//' >> benchmark.json
+          echo ']' >> benchmark.json
 
       - name: Store Benchmark Result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Redis Clone Performance
           tool: 'customBiggerIsBetter'
-          output-file-path: benchmark_output.txt
+          output-file-path: benchmark_output.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
           # alert if performance drops by more than 20%
