@@ -38,7 +38,7 @@ jobs:
           echo '[' > benchmark_output.json
           awk '/requests per second/ {
             gsub(/:/, "", $1);
-            print "{\"name\":\"" $1 "\", \"value\": " $5 "},"
+            print "{\"name\":\"" $1 "\", \"value\": " $2 "},"
           }' benchmark_output.txt | sed '$ s/,$//' >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
