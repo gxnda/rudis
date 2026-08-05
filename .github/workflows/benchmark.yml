@@ -39,7 +39,7 @@ jobs:
 
       - name: Convert benchmark to JSON
         run: |
-          tr -d '\r' < benchmark_output.txt > benchmark_clean.txt
+          tr '\r' '\n' < benchmark_output.txt > benchmark_clean.txt
 
           echo '[' > benchmark_output.json
           awk -F': ' '/requests per second/ {
