@@ -36,9 +36,14 @@ jobs:
       - name: Convert benchmark to JSON
         run: |
           echo '[' > benchmark_output.json
-          awk '/requests per second/ {
-            gsub(/:/, "", $1);
-            print "{\"name\":\"" $1 "\", \"value\": " $2 "},"
+          awk -F': ' '/requests per second/ {
+            name = $1;
+            if (match($2, /[0-9]+(\.[0-9]+)?/)) {
+              val = substr($2, RSTART, RLENGTH);
+            } else {
+              val = 0;
+            }
+            print "{\"name\":\"" name "\", \"value\": " val "},"
           }' benchmark_output.txt | sed '$ s/,$//' >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
