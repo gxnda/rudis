@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
+use crate::storage::clock_sync::{instant_to_unix_ms, unix_ms_to_instant};
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct StorageEngine {
     #[serde(
@@ -69,20 +71,10 @@ where
     S: Serializer,
 {
     match *expiry {
-        Some(exp) => {
-            let now = Instant::now();
-            if now >= exp {
-                serializer.serialize_u128(0)
-            } else {
-                let remaining = exp - now;
-                let total = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(serde::ser::Error::custom)?
-                    + remaining;
-                serializer.serialize_u128(total.as_millis())
-            }
+        Some(exp) if Instant::now() < exp => {
+            serializer.serialize_u64(instant_to_unix_ms(exp))
         }
-        None => serializer.serialize_u128(0),
+        _ => serializer.serialize_u64(0),
     }
 }
 
@@ -90,22 +82,12 @@ fn deserialize_expiry<'de, D>(deserializer: D) -> Result<Option<Instant>, D::Err
 where
     D: Deserializer<'de>,
 {
-    let millis = u128::deserialize(deserializer)?;
+    let millis = u64::deserialize(deserializer)?;
     if millis == 0 {
         return Ok(None);
     }
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(de::Error::custom)?;
-    let expiry_duration = Duration::from_millis(millis.min(u64::MAX as u128) as u64);
-
-    if expiry_duration > now {
-        let remaining = expiry_duration - now;
-        Ok(Some(Instant::now() + remaining))
-    } else {
-        Ok(None)
-    }
+    let expiry: Instant = unix_ms_to_instant(millis);
+    Ok((expiry > Instant::now()).then_some(expiry))
 }
 
 impl Serialize for RedisValue {
