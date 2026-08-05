@@ -1,0 +1,42 @@
+name: Benchmark
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  benchmark:
+    name: Run redis-benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Start Server
+        run: |
+          ./target/release/your-redis-clone-server &
+          sleep 5
+
+      - name: Run Benchmark
+        run: |
+          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt
+
+      - name: Store Benchmark Result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Redis Clone Performance
+          tool: 'customBiggerIsBetter' # Or 'customSmallerIsBetter' for latency
+          output-file-path: benchmark_output.txt
+          # This will store the results in the gh-pages branch of your repo
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # Alert if performance drops by more than 20%
+          alert-threshold: '120%'
+          comment-on-alert: true
+          fail-on-alert: true
+          alert-comment-cc-users: '@your-github-username' # Optional: tag yourself on alerts
