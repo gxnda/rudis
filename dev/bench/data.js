@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785959931952,
+  "lastUpdate": 1785961818173,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Rudis Performance": [
@@ -135,6 +135,42 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 58719.91,
+            "unit": "undefined"
+          }
+        ]
+      }
+    ],
+    "Redis Clone Performance": [
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "99aa0c3699bf878f3cbf6c65e397d56928d53724",
+          "message": "perf: hopefully made expiry (de)serialisation faster by reducing time calls",
+          "timestamp": "2026-08-05T21:29:05+01:00",
+          "tree_id": "0ca804769ee400594e7a7e1a928908541e626d4e",
+          "url": "https://github.com/gxnda/rudis/commit/99aa0c3699bf878f3cbf6c65e397d56928d53724"
+        },
+        "date": 1785961817839,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 57372.34,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 56561.09,
             "unit": "undefined"
           }
         ]
