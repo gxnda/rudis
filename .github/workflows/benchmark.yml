@@ -33,18 +33,24 @@ jobs:
         run: |
           redis-benchmark -q -n 100000 -t ping > benchmark_output.txt
 
+      - name: Check TXT
+        run: cat benchmark_output.txt
+
       - name: Convert benchmark to JSON
         run: |
+          tr -d '\r' < benchmark_output.txt > benchmark_clean.txt
+
           echo '[' > benchmark_output.json
           awk -F': ' '/requests per second/ {
-            name = $1;
-            if (match($2, /[0-9]+(\.[0-9]+)?/)) {
-              val = substr($2, RSTART, RLENGTH);
-            } else {
-              val = 0;
-            }
-            print "{\"name\":\"" name "\", \"value\": " val "},"
-          }' benchmark_output.txt | sed '$ s/,$//' >> benchmark_output.json
+              name = $1;
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
+              if (match($2, /[0-9]+(\.[0-9]+)?/)) {
+                  val = substr($2, RSTART, RLENGTH);
+              } else {
+                  val = 0;
+              }
+              printf "{\"name\":\"%s\", \"value\": %s},\n", name, val;
+          }' benchmark_clean.txt | sed '$ s/,$//' >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
       - name: Check JSON
