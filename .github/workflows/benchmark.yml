@@ -31,7 +31,7 @@ jobs:
 
       - name: Run Benchmark
         run: |
-          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt      - name: Convert benchmark to JSON
+          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt
 
       - name: Convert benchmark to JSON
         run: |
