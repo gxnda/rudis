@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use memchr::memmem;
 use std::array::TryFromSliceError;
 use thiserror::Error;
 
@@ -56,14 +57,9 @@ impl RespValue {
 
     /// Neither side includes the CRLF at the end of the command.
     fn parse_until_crlf(input: &[u8]) -> Result<(&[u8], &[u8]), ParseError> {
-        let mut end = 0;
-        while end + 1 < input.len() {
-            if input[end] == b'\r' && input[end + 1] == b'\n' {
-                return Ok((&input[..end], &input[end + 2..]));
-            }
-            end += 1;
-        }
-        Err(ParseError::Incomplete)
+        memmem::find(input, b"\r\n")
+            .map(|i| (&input[..i], &input[i + 2..]))
+            .ok_or(ParseError::Incomplete)
     }
 
     fn parse_simple_string(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
