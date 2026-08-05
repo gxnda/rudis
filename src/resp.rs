@@ -106,9 +106,7 @@ impl RespValue {
             }
             len if len > 0 => {
                 let len = len as usize;
-                if rest.len() < len + 2 {
-                    Err(ParseError::Incomplete)
-                } else if &rest[len..len + 2] != b"\r\n" {
+                if rest.len() < len + 2 || &rest[len..len + 2] != b"\r\n" {
                     Err(ParseError::Incomplete)
                 } else {
                     let data = Bytes::copy_from_slice(&rest[..len]);

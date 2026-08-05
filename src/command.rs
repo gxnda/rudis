@@ -212,7 +212,7 @@ impl Command {
                                     condition_val = args.next();
                                 }
                                 b"GET" => {
-                                    if get == true {
+                                    if get {
                                         return Err(ParseError::InvalidCommand(
                                             "Can't GET multiple times for one request".into(),
                                         ));
@@ -280,7 +280,7 @@ impl Command {
                         }
                     }
                 }
-                return Ok(Command::Set {
+                Ok(Command::Set {
                     key,
                     value,
                     ttl,
@@ -288,7 +288,7 @@ impl Command {
                     condition_val,
                     get,
                     keep_ttl,
-                });
+                })
             }
 
             "DEL" => {
@@ -612,7 +612,7 @@ impl Command {
                     };
                     array.push(RespValue::BulkString(Some(Bytes::from("PX"))));
                     array.push(RespValue::BulkString(Some(Bytes::from(millis.to_string()))));
-                } else if keep_ttl {
+                } else if *keep_ttl {
                     array.push(RespValue::BulkString(Some(Bytes::from("KEEPTTL"))));
                 }
                 RespValue::Array(Some(array))
