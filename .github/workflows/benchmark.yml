@@ -21,9 +21,12 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      - name: Install Redis Tools
+        run: sudo apt-get update && sudo apt-get install -y redis-tools
+
       - name: Start Server
         run: |
-          ./target/release/your-redis-clone-server &
+          ./target/release/rudisd --aof false &
           sleep 5
 
       - name: Run Benchmark
@@ -34,13 +37,12 @@ jobs:
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Redis Clone Performance
-          tool: 'customBiggerIsBetter' # Or 'customSmallerIsBetter' for latency
+          tool: 'customBiggerIsBetter'
           output-file-path: benchmark_output.txt
-          # This will store the results in the gh-pages branch of your repo
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          # Alert if performance drops by more than 20%
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          # alert if performance drops by more than 20%
           alert-threshold: '120%'
           comment-on-alert: true
           fail-on-alert: true
-          alert-comment-cc-users: '@your-github-username' # Optional: tag yourself on alerts
+          alert-comment-cc-users: '@gxnda'
