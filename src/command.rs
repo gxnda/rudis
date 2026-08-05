@@ -115,13 +115,17 @@ impl Command {
                 return Err(ParseError::InvalidCommand("Null array".to_string()))
             }
             _ => return Err(ParseError::InvalidCommand("Expected array".to_string())),
-        };
-        if args.is_empty() {
+        }
+        .into_iter();
+        if args.len() == 0 {
             return Err(ParseError::InvalidCommand(
                 "Empty command array".to_string(),
             ));
         }
-        let cmd_value = args.remove(0);
+
+        let cmd_value = args
+            .next()
+            .ok_or_else(|| ParseError::InvalidCommand("Empty command array".to_string()))?;
         let cmd_bytes = match cmd_value {
             RespValue::BulkString(Some(s)) => s,
             _ => {
@@ -130,27 +134,26 @@ impl Command {
                 ))
             }
         };
-        let cmd = String::from_utf8_lossy(&cmd_bytes).to_uppercase();
 
-        let mut arg_bytes = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
+        let mut arg_bytes: Vec<Bytes> = Vec::with_capacity(args.len());
+        for item in args {
+            match item {
                 RespValue::BulkString(Some(s)) => arg_bytes.push(s),
                 RespValue::BulkString(None) => {
                     return Err(ParseError::InvalidArgument(
                         "Null bulk string not allowed".to_string(),
-                    ))
+                    ));
                 }
                 _ => {
                     return Err(ParseError::InvalidArgument(
                         "Expected bulk string".to_string(),
-                    ))
+                    ));
                 }
             }
         }
 
-        match cmd.as_str() {
-            "GET" => {
+        match cmd_bytes.as_ref() {
+            b if b.eq_ignore_ascii_case(b"GET") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -161,7 +164,7 @@ impl Command {
                     key: arg_bytes.remove(0),
                 })
             }
-            "SET" => {
+            b if b.eq_ignore_ascii_case(b"SET") => {
                 // SET key value
                 // [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifdeq-digest | IFDNE ifdne-digest]
                 // [GET]
@@ -291,7 +294,7 @@ impl Command {
                 })
             }
 
-            "DEL" => {
+            b if b.eq_ignore_ascii_case(b"DEL") => {
                 if arg_bytes.is_empty() {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -301,7 +304,7 @@ impl Command {
                 Ok(Command::Del { keys: arg_bytes })
             }
 
-            "EXISTS" => {
+            b if b.eq_ignore_ascii_case(b"EXISTS") => {
                 if arg_bytes.is_empty() {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -311,7 +314,7 @@ impl Command {
                 Ok(Command::Exists { keys: arg_bytes })
             }
 
-            "INCR" => {
+            b if b.eq_ignore_ascii_case(b"INCR") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -323,7 +326,7 @@ impl Command {
                 })
             }
 
-            "DECR" => {
+            b if b.eq_ignore_ascii_case(b"DECR") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -335,7 +338,7 @@ impl Command {
                 })
             }
 
-            "PING" => {
+            b if b.eq_ignore_ascii_case(b"PING") => {
                 let message = match arg_bytes.len() {
                     0 => None,
                     1 => Some(arg_bytes.remove(0)),
@@ -349,7 +352,7 @@ impl Command {
                 Ok(Command::Ping { message })
             }
 
-            "ECHO" => {
+            b if b.eq_ignore_ascii_case(b"ECHO") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -361,7 +364,7 @@ impl Command {
                 })
             }
 
-            "FLUSHALL" => {
+            b if b.eq_ignore_ascii_case(b"FLUSHALL") => {
                 if !arg_bytes.is_empty() {
                     return Err(ParseError::InvalidArgCount {
                         expected: 0,
@@ -371,7 +374,7 @@ impl Command {
                 Ok(Command::FlushAll {})
             }
 
-            "KEYS" => {
+            b if b.eq_ignore_ascii_case(b"KEYS") => {
                 // TODO: Make correct, apparently this does not need to be UTF-8 and is inefficient
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
@@ -383,7 +386,7 @@ impl Command {
                 Ok(Command::Keys { pattern })
             }
 
-            "TTL" => {
+            b if b.eq_ignore_ascii_case(b"TTL") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -395,7 +398,7 @@ impl Command {
                 })
             }
 
-            "EXPIRE" => {
+            b if b.eq_ignore_ascii_case(b"EXPIRE") => {
                 if arg_bytes.len() != 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
@@ -412,7 +415,7 @@ impl Command {
                 })
             }
 
-            "PERSIST" => {
+            b if b.eq_ignore_ascii_case(b"PERSIST") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -424,7 +427,7 @@ impl Command {
                 })
             }
 
-            "LPUSH" => {
+            b if b.eq_ignore_ascii_case(b"LPUSH") => {
                 if arg_bytes.len() < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
@@ -436,7 +439,7 @@ impl Command {
                 Ok(Command::LPush { key, elements })
             }
 
-            "RPUSH" => {
+            b if b.eq_ignore_ascii_case(b"RPUSH") => {
                 if arg_bytes.len() < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
@@ -450,7 +453,7 @@ impl Command {
                 })
             }
 
-            "LPOP" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"LPOP") => match arg_bytes.len() {
                 1 => Ok(Command::LPop {
                     key: arg_bytes.remove(0),
                     count: None,
@@ -469,7 +472,7 @@ impl Command {
                 }),
             },
 
-            "RPOP" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"RPOP") => match arg_bytes.len() {
                 1 => Ok(Command::RPop {
                     key: arg_bytes.remove(0),
                     count: None,
@@ -488,7 +491,7 @@ impl Command {
                 }),
             },
 
-            "LLEN" => {
+            b if b.eq_ignore_ascii_case(b"LLEN") => {
                 if arg_bytes.len() != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
@@ -499,7 +502,7 @@ impl Command {
                     key: arg_bytes.remove(0),
                 })
             }
-            "PUBLISH" => {
+            b if b.eq_ignore_ascii_case(b"PUBLISH") => {
                 if arg_bytes.len() < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
@@ -511,7 +514,7 @@ impl Command {
                     channel: arg_bytes.remove(0),
                 })
             }
-            "SUBSCRIBE" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"SUBSCRIBE") => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
@@ -520,7 +523,7 @@ impl Command {
                     channels: arg_bytes,
                 }),
             },
-            "PSUBSCRIBE" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"PSUBSCRIBE") => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
@@ -541,7 +544,7 @@ impl Command {
                     })
                 }
             },
-            "UNSUBSCRIBE" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"UNSUBSCRIBE") => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
@@ -550,7 +553,7 @@ impl Command {
                     channels: arg_bytes,
                 }),
             },
-            "PUNSUBSCRIBE" => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"PUNSUBSCRIBE") => match arg_bytes.len() {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
@@ -572,7 +575,9 @@ impl Command {
                 }
             },
 
-            _ => Err(ParseError::InvalidCommand(cmd)),
+            _ => Err(ParseError::InvalidCommand(
+                String::from_utf8_lossy(&cmd_bytes).to_string(),
+            )),
         }
     }
 
