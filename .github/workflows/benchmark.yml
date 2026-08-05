@@ -42,6 +42,9 @@ jobs:
           }' benchmark_output.txt | sed '$ s/,$//' >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
+      - name: Check JSON
+        run: cat benchmark_output.json
+
       - name: Store Benchmark Result
         uses: benchmark-action/github-action-benchmark@v1
         with:
