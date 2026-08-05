@@ -35,12 +35,12 @@ jobs:
 
       - name: Convert benchmark to JSON
         run: |
-          echo '[' > benchmark.json
+          echo '[' > benchmark_output.json
           awk '/requests per second/ {
             gsub(/:/, "", $1);
             print "{\"name\":\"" $1 "\", \"value\": " $5 "},"
-          }' benchmark_output.txt | sed '$ s/,$//' >> benchmark.json
-          echo ']' >> benchmark.json
+          }' benchmark_output.txt | sed '$ s/,$//' >> benchmark_output.json
+          echo ']' >> benchmark_output.json
 
       - name: Store Benchmark Result
         uses: benchmark-action/github-action-benchmark@v1
