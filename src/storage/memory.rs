@@ -415,7 +415,6 @@ impl StorageEngine {
                 _ => regex.push(c),
             }
         }
-
         regex.push('$'); // Match to the end
         regex
     }
