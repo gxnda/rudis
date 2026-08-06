@@ -385,14 +385,13 @@ impl StorageEngine {
 
         for entry in self.data.iter() {
             // check if its expired
-            if let Some(expiry) = entry.expiry {
-                if expiry < now {
-                    continue;
-                }
+            if entry.is_older_than(now) {
+                continue;
             }
 
             if let RedisValue::String(str_bytes) = &entry.value {
                 if re.is_match(str_bytes) {
+                    // TODO: Doesn't this return the keys not values??
                     matches.push(entry.key().clone());
                 }
             }
@@ -453,19 +452,22 @@ impl StorageEngine {
     }
 
     pub fn remove_expired(&self) {
-        self.data.retain(|_, entry| !entry.is_expired());
+        let now = Instant::now();
+        self.data.retain(|_, entry| !entry.is_older_than(now));
     }
 
     fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
-        data.retain(|_, entry| !entry.is_expired());
+        let now = Instant::now();
+        data.retain(|_, entry| !entry.is_older_than(now));
     }
 
     pub fn remove_expired_par(&self) {
         // possibly faster for large dashmaps
+        let now = Instant::now();
         let keys_to_remove: Vec<_> = self
             .data
             .par_iter()
-            .filter(|entry| entry.value().is_expired())
+            .filter(|entry| entry.value().is_older_than(now))
             .map(|entry| entry.key().clone())
             .collect();
 

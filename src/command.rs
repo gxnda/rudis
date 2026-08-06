@@ -1,9 +1,10 @@
+use crate::storage::clock_sync::unix_ms_to_instant;
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
 use atoi::atoi;
 use bytes::Bytes;
 use std::iter::Iterator;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -189,98 +190,75 @@ impl Command {
                 while args.len() != 0 {
                     match args.next() {
                         None => unreachable!(),
-                        Some(arg) => {
-                            match arg.as_ref() {
-                                b"NX" | b"XX" => {
-                                    if condition_type.is_some() {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Condition options are mutually exclusive".into(),
-                                        ));
-                                    }
-                                    condition_type = Some(arg);
-                                    continue;
+                        Some(arg) => match arg.as_ref() {
+                            b"NX" | b"XX" => {
+                                if condition_type.is_some() {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Condition options are mutually exclusive".into(),
+                                    ));
                                 }
-                                b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
-                                    if condition_type.is_some() {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Condition options are mutually exclusive".into(),
-                                        ));
-                                    }
-                                    condition_type = Some(arg);
-                                    if args.len() == 0 {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Expected value for condition".into(),
-                                        ));
-                                    }
-                                    condition_val = args.next();
+                                condition_type = Some(arg);
+                                continue;
+                            }
+                            b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
+                                if condition_type.is_some() {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Condition options are mutually exclusive".into(),
+                                    ));
                                 }
-                                b"GET" => {
-                                    if get {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Can't GET multiple times for one request".into(),
-                                        ));
-                                    }
-                                    get = true;
+                                condition_type = Some(arg);
+                                if args.len() == 0 {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Expected value for condition".into(),
+                                    ));
                                 }
-                                b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
-                                    if ttl.is_some() || keep_ttl {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Expiration options are mutually exclusive".into(),
-                                        ));
-                                    }
-                                    if args.len() == 0 {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Expected value for expiry".into(),
-                                        ));
-                                    }
-                                    let duration_val = atoi::<u64>(&args.next().unwrap())
-                                        .ok_or_else(|| {
-                                            ParseError::InvalidDuration(
-                                                "Invalid expire seconds".into(),
-                                            )
-                                        })?;
-                                    ttl = match arg.as_ref() {
-                                        b"EX" => {
-                                            Some(Instant::now() + Duration::from_secs(duration_val))
-                                        }
-                                        b"PX" => Some(
-                                            Instant::now() + Duration::from_millis(duration_val),
-                                        ),
-                                        b"EXAT" => {
-                                            // Absolute Unix timestamp in seconds
-                                            let absolute =
-                                                UNIX_EPOCH + Duration::from_secs(duration_val);
-                                            let remaining = absolute
-                                                .duration_since(SystemTime::now())
-                                                .unwrap_or(Duration::ZERO);
-                                            Some(Instant::now() + remaining)
-                                        }
-                                        b"PXAT" => {
-                                            let absolute =
-                                                UNIX_EPOCH + Duration::from_millis(duration_val);
-                                            Some(
-                                                Instant::now()
-                                                    + absolute
-                                                        .duration_since(SystemTime::now())
-                                                        .unwrap_or(Duration::ZERO),
-                                            )
-                                        }
-                                        _ => unreachable!(),
-                                    }
+                                condition_val = args.next();
+                            }
+                            b"GET" => {
+                                if get {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Can't GET multiple times for one request".into(),
+                                    ));
                                 }
-                                b"KEEPTTL" => {
-                                    if ttl.is_some() || keep_ttl {
-                                        return Err(ParseError::InvalidCommand(
-                                            "Expiration options are mutually exclusive".into(),
-                                        ));
-                                    }
-                                    keep_ttl = true;
+                                get = true;
+                            }
+                            b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
+                                if ttl.is_some() || keep_ttl {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Expiration options are mutually exclusive".into(),
+                                    ));
                                 }
-                                _ => {
-                                    return Err(ParseError::InvalidCommand("Invalid syntax".into()))
+                                if args.len() == 0 {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Expected value for expiry".into(),
+                                    ));
+                                }
+                                let duration_val =
+                                    atoi::<u64>(&args.next().unwrap()).ok_or_else(|| {
+                                        ParseError::InvalidDuration("Invalid expire seconds".into())
+                                    })?;
+                                ttl = match arg.as_ref() {
+                                    b"EX" => {
+                                        Some(Instant::now() + Duration::from_secs(duration_val))
+                                    }
+                                    b"PX" => {
+                                        Some(Instant::now() + Duration::from_millis(duration_val))
+                                    }
+                                    b"EXAT" => Some(unix_ms_to_instant(duration_val * 1000)),
+                                    b"PXAT" => Some(unix_ms_to_instant(duration_val)),
+                                    _ => unreachable!(),
                                 }
                             }
-                        }
+                            b"KEEPTTL" => {
+                                if ttl.is_some() || keep_ttl {
+                                    return Err(ParseError::InvalidCommand(
+                                        "Expiration options are mutually exclusive".into(),
+                                    ));
+                                }
+                                keep_ttl = true;
+                            }
+                            _ => return Err(ParseError::InvalidCommand("Invalid syntax".into())),
+                        },
                     }
                 }
                 Ok(Command::Set {
