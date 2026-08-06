@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785962416766,
+  "lastUpdate": 1786020561329,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Rudis Performance": [
@@ -205,6 +205,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 60459.49,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "b56f7db5710fc34074e903b5221e99c0fd54ac95",
+          "message": "perf: reduced total number of now() calls by checking after Some expiry",
+          "timestamp": "2026-08-06T13:48:02+01:00",
+          "tree_id": "108e0e4124a8659891a68a319b21dd6913b22602",
+          "url": "https://github.com/gxnda/rudis/commit/b56f7db5710fc34074e903b5221e99c0fd54ac95"
+        },
+        "date": 1786020560436,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 57636.89,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 58823.53,
             "unit": "undefined"
           }
         ]
