@@ -71,9 +71,7 @@ where
     S: Serializer,
 {
     match *expiry {
-        Some(exp) if Instant::now() < exp => {
-            serializer.serialize_u64(instant_to_unix_ms(exp))
-        }
+        Some(exp) if Instant::now() < exp => serializer.serialize_u64(instant_to_unix_ms(exp)),
         _ => serializer.serialize_u64(0),
     }
 }
@@ -239,12 +237,20 @@ impl Clone for DataEntry {
 
 impl DataEntry {
     pub fn is_expired(&self) -> bool {
-        self.is_older_than(Instant::now())
+        self.is_older_than_now()
     }
 
     fn is_older_than(&self, instant: Instant) -> bool {
         if let Some(exp) = self.expiry {
             exp < instant
+        } else {
+            false
+        }
+    }
+
+    fn is_older_than_now(&self) -> bool {
+        if let Some(exp) = self.expiry {
+            exp < Instant::now()
         } else {
             false
         }
