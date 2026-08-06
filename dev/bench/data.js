@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786023816697,
+  "lastUpdate": 1786026248704,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -271,6 +271,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 58105.75,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "3cceb22d92f86242b6b95c72cb3ce094c06240be",
+          "message": "removed newline (ikr!)",
+          "timestamp": "2026-08-06T15:22:52+01:00",
+          "tree_id": "e19f3a4891468ac15a38ef7d567373da64dd9632",
+          "url": "https://github.com/gxnda/rudis/commit/3cceb22d92f86242b6b95c72cb3ce094c06240be"
+        },
+        "date": 1786026248087,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 56915.2,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 58962.27,
             "unit": "undefined"
           }
         ]
