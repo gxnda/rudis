@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786020561329,
+  "lastUpdate": 1786023816697,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Rudis Performance": [
@@ -239,6 +239,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 58823.53,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "51412206dc5029efb27a76b724e59ad21166e8e4",
+          "message": "perf: reduced now() calls in memory and commands",
+          "timestamp": "2026-08-06T14:42:15+01:00",
+          "tree_id": "89fd882cfff1e49733e747e53ae84153212cab39",
+          "url": "https://github.com/gxnda/rudis/commit/51412206dc5029efb27a76b724e59ad21166e8e4"
+        },
+        "date": 1786023816098,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 58788.95,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 58105.75,
             "unit": "undefined"
           }
         ]
