@@ -452,8 +452,11 @@ impl StorageEngine {
     }
 
     pub fn remove_expired(&self) {
-        let now = Instant::now();
-        self.data.retain(|_, entry| !entry.is_older_than(now));
+        return self.remove_older_than(Instant::now());
+    }
+
+    pub fn remove_older_than(&self, inst: Instant) {
+        self.data.retain(|_, entry| !entry.is_older_than(inst));
     }
 
     fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
@@ -482,7 +485,7 @@ impl StorageEngine {
 
         // starts active expiration in bg
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
             while !child_token.is_cancelled() {
                 tokio::select! {
                     _ = child_token.cancelled() => break,
