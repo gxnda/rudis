@@ -63,6 +63,7 @@ jobs:
           name: Redis Clone Performance
           tool: 'customBiggerIsBetter'
           output-file-path: benchmark_output.json
+          gh-pages-branch: benchmark-data
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
           # alert if performance drops by more than 20%
