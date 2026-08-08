@@ -33,7 +33,7 @@ RPOP: 286532.94 requests per second, p50=0.087 msec
 - [ ] Implement more commands
 
 ## Efficiency
-- [x] Reduce number of now() calls and UNIX comparisons in memory.rs (and perhaps even in command.rs)
+- [ ] Reduce number of now() calls and UNIX comparisons in memory.rs (and perhaps even in command.rs)
   - As of 5/8/2026, 7.84% of redis-benchmark -t ping is now() calls
 - [ ] Reduce number of to_string() in Command::execute()
   - As of 5/8/2026, 1.25% of redis-benchmark -t ping is Execute, more than half of that (0.62%) being to_string()
