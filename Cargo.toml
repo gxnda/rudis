@@ -32,3 +32,23 @@ criterion = "0.5"
 rand = "0.8"
 lazy_static = "1.4"
 
+[[bench]]
+name = "resp_parsing"
+harness = false
+
+[[bench]]
+name = "storage_operations"
+harness = false
+
+[[bench]]
+name = "data_structures"
+harness = false
+
+[[bench]]
+name = "expiry_operations"
+harness = false
+
+[[bench]]
+name = "concurrency"
+harness = false
+
