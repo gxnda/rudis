@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786026248704,
+  "lastUpdate": 1786192167016,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -305,6 +305,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "PING_MBULK",
             "value": 58962.27,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "48900e34e42bc73881613f75d46b12ff6740eb8d",
+          "message": "chore: unticked TODO, now() is not efficient enough",
+          "timestamp": "2026-08-08T13:28:06+01:00",
+          "tree_id": "a3be9b1b32dfdbdb46d351db3b3d2dd16fdec6ac",
+          "url": "https://github.com/gxnda/rudis/commit/48900e34e42bc73881613f75d46b12ff6740eb8d"
+        },
+        "date": 1786192165973,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 58788.95,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 59772.86,
             "unit": "undefined"
           }
         ]
