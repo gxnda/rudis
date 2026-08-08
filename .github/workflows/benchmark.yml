@@ -32,7 +32,7 @@ jobs:
 
       - name: Run Benchmark
         run: |
-          redis-benchmark -q -n 100000 -t ping > benchmark_output.txt
+          redis-benchmark -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > benchmark_output.txt
 
       - name: Check TXT
         run: cat benchmark_output.txt
