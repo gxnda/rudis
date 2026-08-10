@@ -287,12 +287,10 @@ impl StorageEngine {
     pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
         if let Some(entry) = self.data.get(key) {
             // Passive expiration, deletes on get
-            if let Some(expiry) = entry.expiry {
-                if expiry < Instant::now() {
-                    drop(entry);
-                    self.data.remove(key);
-                    return None;
-                }
+            if entry.is_expired() {
+                drop(entry);
+                self.data.remove(key);
+                return None;
             }
             return Some(entry.value.clone());
         }
