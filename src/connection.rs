@@ -55,19 +55,19 @@ where
     }
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        let buf: &[u8] = self.buffer.as_ref();
-        match RespValue::parse(buf) {
+        let buffer_ref: &[u8] = self.buffer.as_ref();
+        match RespValue::parse(buffer_ref) {
             Ok((resp, consumed)) => {
                 if let Some(aof) = &self.aof {
                     aof.append_str(
                         // adds to AOF only if valid
-                        str::from_utf8(buf)
+                        str::from_utf8(buffer_ref)
                             .map_err(|e| ConnectionError::AofError(e.to_string()))?,
                     )
                     .await
                     .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
-                self.buffer.advance(buf.len() - consumed.len()); // done with these bytes now, they're boring
+                self.buffer.advance(buffer_ref.len() - consumed.len()); // done with these bytes now, they're boring
                 Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
@@ -78,7 +78,7 @@ where
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
-        let mut temp_ref = [0u8; 1024];
+        const CHUNK_SIZE: usize = 1024;
 
         // if it's empty, it will timeout waiting for more data
         if !self.buffer.is_empty() {
@@ -88,8 +88,9 @@ where
             }
         }
 
-        // if buffer is not ready yet
-        match timeout(READ_TIMEOUT, self.stream.read(&mut temp_ref)).await {
+        // reserve space for new data in our lil buffer
+        self.buffer.reserve(CHUNK_SIZE);
+        match timeout(READ_TIMEOUT, self.stream.read_buf(&mut self.buffer)).await {
             Ok(Ok(0)) => {
                 // nothing else sent
                 if self.buffer.is_empty() {
@@ -99,11 +100,9 @@ where
                     Err(ConnectionError::Disconnected)
                 }
             }
-            Ok(Ok(n)) => {
-                // add read data to buffer
-                self.buffer.extend_from_slice(&temp_ref[..n]);
-                return self.parse_buffer().await; // uses recursion instead of while loop to stop
-                                                  // timeout on incomplete commands
+            Ok(Ok(_)) => {
+                // stream read() at the start of the match already added to buffer
+                return self.parse_buffer().await;
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                 // handle a non blocking stream (idk what this is)
