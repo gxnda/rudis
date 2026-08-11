@@ -50,23 +50,15 @@ impl AOF {
 
     pub async fn append_str(&self, resp_str: &str) -> Result<(), PersistenceError> {
         // resp_str is not checked if it is valid.
-        let mut file_guard = self.write_mutex.lock().await;
-        if file_guard.is_none() {
-            *file_guard = Some(
-                OpenOptions::new()
-                    .write(true)
-                    .append(true)
-                    .open(&self.config.aof_path)
-                    .await?,
-            );
-        }
-        let file = file_guard.as_mut().unwrap();
-        file.write_all(resp_str.as_bytes()).await?;
-        file.flush().await?; // basically saves the file
-        Ok(())
+        self.append_bytes(resp_str.as_bytes()).await
     }
 
     pub async fn append_command(&self, resp_command: &RespValue) -> Result<(), PersistenceError> {
+        self.append_bytes(&resp_command.serialize()).await
+    }
+
+    pub async fn append_bytes(&self, bytes: &[u8]) -> Result<(), PersistenceError> {
+        // resp_str is not checked if it is valid.
         let mut file_guard = self.write_mutex.lock().await;
         if file_guard.is_none() {
             *file_guard = Some(
@@ -78,7 +70,7 @@ impl AOF {
             );
         }
         let file = file_guard.as_mut().unwrap();
-        file.write_all(&resp_command.serialize()).await?;
+        file.write_all(bytes).await?;
         file.flush().await?; // basically saves the file
         Ok(())
     }

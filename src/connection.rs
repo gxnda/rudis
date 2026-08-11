@@ -57,17 +57,14 @@ where
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         let buffer_ref: &[u8] = self.buffer.as_ref();
         match RespValue::parse(buffer_ref) {
-            Ok((resp, consumed)) => {
+            Ok((resp, remainder)) => {
+                let consumed_len = buffer_ref.len() - remainder.len();
                 if let Some(aof) = &self.aof {
-                    aof.append_str(
-                        // adds to AOF only if valid
-                        str::from_utf8(buffer_ref)
-                            .map_err(|e| ConnectionError::AofError(e.to_string()))?,
-                    )
-                    .await
-                    .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+                    aof.append_bytes(&buffer_ref[..consumed_len])
+                        .await
+                        .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
-                self.buffer.advance(buffer_ref.len() - consumed.len()); // done with these bytes now, they're boring
+                self.buffer.advance(consumed_len); // done with these bytes now
                 Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
