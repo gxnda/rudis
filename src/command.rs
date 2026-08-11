@@ -124,9 +124,8 @@ impl Command {
             ));
         }
 
-        let cmd_value = args
-            .next()
-            .ok_or_else(|| ParseError::InvalidCommand("Empty command array".to_string()))?;
+        let remaining = args.len() - 1;
+        let cmd_value = args.next().expect("len > 0");
         let cmd_bytes = match cmd_value {
             RespValue::BulkString(Some(s)) => s,
             _ => {
@@ -136,33 +135,46 @@ impl Command {
             }
         };
 
-        let mut arg_bytes: Vec<Bytes> = Vec::with_capacity(args.len());
-        for item in args {
-            match item {
-                RespValue::BulkString(Some(s)) => arg_bytes.push(s),
-                RespValue::BulkString(None) => {
-                    return Err(ParseError::InvalidArgument(
-                        "Null bulk string not allowed".to_string(),
-                    ));
+        macro_rules! next_bulk {
+            ($iter:expr) => {
+                match $iter.next() {
+                    Some(RespValue::BulkString(Some(s))) => Ok(s),
+                    Some(RespValue::BulkString(None)) => {
+                        Err(ParseError::InvalidArgument("Null bulk string".into()))
+                    }
+                    Some(_) => Err(ParseError::InvalidArgument("Expected bulk string".into())),
+                    None => Err(ParseError::InvalidArgCount {
+                        expected: 1,
+                        got: 0,
+                    }),
                 }
-                _ => {
-                    return Err(ParseError::InvalidArgument(
-                        "Expected bulk string".to_string(),
-                    ));
-                }
-            }
+            };
+        }
+
+        macro_rules! resp_to_vec {
+            ($iter:expr) => {
+                $iter
+                    .map(|e| match e {
+                        RespValue::BulkString(Some(s)) => Ok(s),
+                        RespValue::BulkString(None) => {
+                            Err(ParseError::InvalidArgument("Null bulk string".into()))
+                        }
+                        _ => Err(ParseError::InvalidArgument("Expected bulk string".into())),
+                    })
+                    .collect::<Result<Vec<Bytes>, ParseError>>()
+            };
         }
 
         match cmd_bytes.as_ref() {
             b if b.eq_ignore_ascii_case(b"GET") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Get {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
             b if b.eq_ignore_ascii_case(b"SET") => {
@@ -170,16 +182,15 @@ impl Command {
                 // [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifdeq-digest | IFDNE ifdne-digest]
                 // [GET]
                 // [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | KEEPTTL]
-                if arg_bytes.len() < 2 {
+                if remaining < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
 
-                let mut args = arg_bytes.into_iter();
-                let key = args.next().unwrap();
-                let value = args.next().unwrap();
+                let key = next_bulk!(args)?;
+                let value = next_bulk!(args)?;
 
                 let mut ttl = None;
                 let mut condition_type = None;
@@ -188,77 +199,71 @@ impl Command {
                 let mut keep_ttl = false;
 
                 while args.len() != 0 {
-                    match args.next() {
-                        None => unreachable!(),
-                        Some(arg) => match arg.as_ref() {
-                            b"NX" | b"XX" => {
-                                if condition_type.is_some() {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Condition options are mutually exclusive".into(),
-                                    ));
-                                }
-                                condition_type = Some(arg);
-                                continue;
+                    let arg = next_bulk!(args)?;
+                    match arg.as_ref() {
+                        b"NX" | b"XX" => {
+                            if condition_type.is_some() {
+                                return Err(ParseError::InvalidCommand(
+                                    "Condition options are mutually exclusive".into(),
+                                ));
                             }
-                            b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
-                                if condition_type.is_some() {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Condition options are mutually exclusive".into(),
-                                    ));
-                                }
-                                condition_type = Some(arg);
-                                if args.len() == 0 {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Expected value for condition".into(),
-                                    ));
-                                }
-                                condition_val = args.next();
+                            condition_type = Some(arg);
+                            continue;
+                        }
+                        b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
+                            if condition_type.is_some() {
+                                return Err(ParseError::InvalidCommand(
+                                    "Condition options are mutually exclusive".into(),
+                                ));
                             }
-                            b"GET" => {
-                                if get {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Can't GET multiple times for one request".into(),
-                                    ));
-                                }
-                                get = true;
+                            condition_type = Some(arg);
+                            if args.len() == 0 {
+                                return Err(ParseError::InvalidCommand(
+                                    "Expected value for condition".into(),
+                                ));
                             }
-                            b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
-                                if ttl.is_some() || keep_ttl {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Expiration options are mutually exclusive".into(),
-                                    ));
-                                }
-                                if args.len() == 0 {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Expected value for expiry".into(),
-                                    ));
-                                }
-                                let duration_val =
-                                    atoi::<u64>(&args.next().unwrap()).ok_or_else(|| {
-                                        ParseError::InvalidDuration("Invalid expire seconds".into())
-                                    })?;
-                                ttl = match arg.as_ref() {
-                                    b"EX" => {
-                                        Some(Instant::now() + Duration::from_secs(duration_val))
-                                    }
-                                    b"PX" => {
-                                        Some(Instant::now() + Duration::from_millis(duration_val))
-                                    }
-                                    b"EXAT" => Some(unix_ms_to_instant(duration_val * 1000)),
-                                    b"PXAT" => Some(unix_ms_to_instant(duration_val)),
-                                    _ => unreachable!(),
-                                }
+                            condition_val = Some(next_bulk!(args)?);
+                        }
+                        b"GET" => {
+                            if get {
+                                return Err(ParseError::InvalidCommand(
+                                    "Can't GET multiple times for one request".into(),
+                                ));
                             }
-                            b"KEEPTTL" => {
-                                if ttl.is_some() || keep_ttl {
-                                    return Err(ParseError::InvalidCommand(
-                                        "Expiration options are mutually exclusive".into(),
-                                    ));
-                                }
-                                keep_ttl = true;
+                            get = true;
+                        }
+                        b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
+                            if ttl.is_some() || keep_ttl {
+                                return Err(ParseError::InvalidCommand(
+                                    "Expiration options are mutually exclusive".into(),
+                                ));
                             }
-                            _ => return Err(ParseError::InvalidCommand("Invalid syntax".into())),
-                        },
+                            if args.len() == 0 {
+                                return Err(ParseError::InvalidCommand(
+                                    "Expected value for expiry".into(),
+                                ));
+                            }
+                            let duration_val = atoi::<u64>(next_bulk!(args).as_ref().unwrap())
+                                .ok_or_else(|| {
+                                    ParseError::InvalidDuration("Invalid expire seconds".into())
+                                })?;
+                            ttl = match arg.as_ref() {
+                                b"EX" => Some(Instant::now() + Duration::from_secs(duration_val)),
+                                b"PX" => Some(Instant::now() + Duration::from_millis(duration_val)),
+                                b"EXAT" => Some(unix_ms_to_instant(duration_val * 1000)),
+                                b"PXAT" => Some(unix_ms_to_instant(duration_val)),
+                                _ => unreachable!(),
+                            }
+                        }
+                        b"KEEPTTL" => {
+                            if ttl.is_some() || keep_ttl {
+                                return Err(ParseError::InvalidCommand(
+                                    "Expiration options are mutually exclusive".into(),
+                                ));
+                            }
+                            keep_ttl = true;
+                        }
+                        _ => return Err(ParseError::InvalidCommand("Invalid syntax".into())),
                     }
                 }
                 Ok(Command::Set {
@@ -273,57 +278,60 @@ impl Command {
             }
 
             b if b.eq_ignore_ascii_case(b"DEL") => {
-                if arg_bytes.is_empty() {
+                if remaining == 0 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
                         got: 0,
                     });
                 }
-                Ok(Command::Del { keys: arg_bytes })
+                let keys: Vec<Bytes> = resp_to_vec!(args)?;
+                Ok(Command::Del { keys: keys })
             }
 
             b if b.eq_ignore_ascii_case(b"EXISTS") => {
-                if arg_bytes.is_empty() {
+                if remaining == 0 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
                         got: 0,
                     });
                 }
-                Ok(Command::Exists { keys: arg_bytes })
+                Ok(Command::Exists {
+                    keys: resp_to_vec!(args)?,
+                })
             }
 
             b if b.eq_ignore_ascii_case(b"INCR") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Incr {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
 
             b if b.eq_ignore_ascii_case(b"DECR") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Decr {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
 
             b if b.eq_ignore_ascii_case(b"PING") => {
-                let message = match arg_bytes.len() {
+                let message = match remaining {
                     0 => None,
-                    1 => Some(arg_bytes.remove(0)),
+                    1 => Some(next_bulk!(args).unwrap()),
                     _ => {
                         return Err(ParseError::InvalidArgCount {
                             expected: 1,
-                            got: arg_bytes.len(),
+                            got: remaining,
                         })
                     }
                 };
@@ -331,22 +339,22 @@ impl Command {
             }
 
             b if b.eq_ignore_ascii_case(b"ECHO") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Echo {
-                    message: arg_bytes.remove(0),
+                    message: next_bulk!(args)?,
                 })
             }
 
             b if b.eq_ignore_ascii_case(b"FLUSHALL") => {
-                if !arg_bytes.is_empty() {
+                if remaining != 0 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 0,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::FlushAll {})
@@ -354,38 +362,38 @@ impl Command {
 
             b if b.eq_ignore_ascii_case(b"KEYS") => {
                 // TODO: Make correct, apparently this does not need to be UTF-8 and is inefficient
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
-                let pattern = String::from_utf8_lossy(&arg_bytes[0]).to_string();
+                let pattern = String::from_utf8_lossy(&next_bulk!(args)?).to_string();
                 Ok(Command::Keys { pattern })
             }
 
             b if b.eq_ignore_ascii_case(b"TTL") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::TTL {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
 
             b if b.eq_ignore_ascii_case(b"EXPIRE") => {
-                if arg_bytes.len() != 2 {
+                if remaining != 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
-                let seconds: u64 = atoi::<u64>(&arg_bytes.pop().unwrap())
+                let key = next_bulk!(args).unwrap();
+                let seconds: u64 = atoi::<u64>(&next_bulk!(args).unwrap())
                     .ok_or_else(|| ParseError::InvalidDuration("Invalid expire seconds".into()))?;
-                let key = arg_bytes.pop().unwrap();
 
                 Ok(Command::Expire {
                     key,
@@ -394,120 +402,119 @@ impl Command {
             }
 
             b if b.eq_ignore_ascii_case(b"PERSIST") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Persist {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
 
             b if b.eq_ignore_ascii_case(b"LPUSH") => {
-                if arg_bytes.len() < 2 {
+                if remaining < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
-                let key = arg_bytes[0].clone();
-                let elements = arg_bytes[1..].to_vec();
+                let key = next_bulk!(args)?;
+                let elements = resp_to_vec!(args)?;
                 Ok(Command::LPush { key, elements })
             }
 
             b if b.eq_ignore_ascii_case(b"RPUSH") => {
-                if arg_bytes.len() < 2 {
+                if remaining < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
-                let key = arg_bytes.remove(0);
+                let key = next_bulk!(args)?;
                 Ok(Command::RPush {
                     key,
-                    elements: arg_bytes,
+                    elements: resp_to_vec!(args)?,
                 })
             }
 
-            b if b.eq_ignore_ascii_case(b"LPOP") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"LPOP") => match remaining {
                 1 => Ok(Command::LPop {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args).unwrap(),
                     count: None,
                 }),
-                2 => {
-                    let count = atoi::<u64>(&arg_bytes.remove(1))
-                        .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?;
-                    Ok(Command::LPop {
-                        key: arg_bytes.remove(0),
-                        count: Some(count),
-                    })
-                }
+                2 => Ok(Command::LPop {
+                    key: next_bulk!(args).unwrap(),
+                    count: Some(
+                        atoi::<u64>(&next_bulk!(args).unwrap())
+                            .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?,
+                    ),
+                }),
                 _ => Err(ParseError::InvalidArgCount {
                     expected: 1,
-                    got: arg_bytes.len(),
+                    got: remaining,
                 }),
             },
 
-            b if b.eq_ignore_ascii_case(b"RPOP") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"RPOP") => match remaining {
                 1 => Ok(Command::RPop {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args).unwrap(),
                     count: None,
                 }),
-                2 => {
-                    let count = atoi::<u64>(&arg_bytes.remove(1))
-                        .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?;
-                    Ok(Command::RPop {
-                        key: arg_bytes.remove(0),
-                        count: Some(count),
-                    })
-                }
+                2 => Ok(Command::RPop {
+                    key: next_bulk!(args).unwrap(),
+                    count: Some(
+                        atoi::<u64>(&next_bulk!(args).unwrap())
+                            .ok_or_else(|| ParseError::InvalidDuration("Invalid count".into()))?,
+                    ),
+                }),
                 _ => Err(ParseError::InvalidArgCount {
                     expected: 1,
-                    got: arg_bytes.len(),
+                    got: remaining,
                 }),
             },
 
             b if b.eq_ignore_ascii_case(b"LLEN") => {
-                if arg_bytes.len() != 1 {
+                if remaining != 1 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 1,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::LLen {
-                    key: arg_bytes.remove(0),
+                    key: next_bulk!(args)?,
                 })
             }
             b if b.eq_ignore_ascii_case(b"PUBLISH") => {
-                if arg_bytes.len() < 2 {
+                if remaining < 2 {
                     return Err(ParseError::InvalidArgCount {
                         expected: 2,
-                        got: arg_bytes.len(),
+                        got: remaining,
                     });
                 }
                 Ok(Command::Publish {
-                    message: arg_bytes.remove(1),
-                    channel: arg_bytes.remove(0),
+                    channel: next_bulk!(args).unwrap(),
+                    message: next_bulk!(args).unwrap(),
                 })
             }
-            b if b.eq_ignore_ascii_case(b"SUBSCRIBE") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"SUBSCRIBE") => match remaining {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
                 }),
                 _ => Ok(Command::Subscribe {
-                    channels: arg_bytes,
+                    channels: resp_to_vec!(args)?,
                 }),
             },
-            b if b.eq_ignore_ascii_case(b"PSUBSCRIBE") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"PSUBSCRIBE") => match remaining {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
                 }),
                 _ => {
-                    let patterns: Result<Vec<String>, ParseError> = arg_bytes
+                    let vec: Vec<Bytes> = resp_to_vec!(args)?;
+                    let patterns: Result<Vec<String>, ParseError> = vec
                         .iter()
                         .map(|arg| {
                             std::str::from_utf8(arg)
@@ -522,22 +529,23 @@ impl Command {
                     })
                 }
             },
-            b if b.eq_ignore_ascii_case(b"UNSUBSCRIBE") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"UNSUBSCRIBE") => match remaining {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
                 }),
                 _ => Ok(Command::Unsubscribe {
-                    channels: arg_bytes,
+                    channels: resp_to_vec!(args)?,
                 }),
             },
-            b if b.eq_ignore_ascii_case(b"PUNSUBSCRIBE") => match arg_bytes.len() {
+            b if b.eq_ignore_ascii_case(b"PUNSUBSCRIBE") => match remaining {
                 0 => Err(ParseError::InvalidArgCount {
                     expected: 1,
                     got: 0,
                 }),
                 _ => {
-                    let patterns: Result<Vec<String>, ParseError> = arg_bytes
+                    let vec: Vec<Bytes> = resp_to_vec!(args)?;
+                    let patterns: Result<Vec<String>, ParseError> = vec
                         .iter()
                         .map(|arg| {
                             std::str::from_utf8(arg)
