@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786399725141,
+  "lastUpdate": 1786456069987,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -684,6 +684,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP",
             "value": 59206.63,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "a4524bc69ffa33d02a1a6264bdc3adbf878fc507",
+          "message": "perf?: dynamically created arg_bytes when needed, hopefully reduces malloc for some commands",
+          "timestamp": "2026-08-11T14:46:19+01:00",
+          "tree_id": "001c72f7bae94fb7e74482944588df1b89b89e90",
+          "url": "https://github.com/gxnda/rudis/commit/a4524bc69ffa33d02a1a6264bdc3adbf878fc507"
+        },
+        "date": 1786456069219,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 56689.34,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 57175.53,
+            "unit": "undefined"
+          },
+          {
+            "name": "SET",
+            "value": 57405.28,
+            "unit": "undefined"
+          },
+          {
+            "name": "GET",
+            "value": 57306.59,
+            "unit": "undefined"
+          },
+          {
+            "name": "INCR",
+            "value": 57537.4,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPUSH",
+            "value": 58927.52,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPUSH",
+            "value": 58548.01,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPOP",
+            "value": 57836.9,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPOP",
+            "value": 58275.06,
             "unit": "undefined"
           }
         ]
