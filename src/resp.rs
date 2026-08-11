@@ -1,3 +1,4 @@
+use atoi::atoi;
 use bytes::Bytes;
 use memchr::memmem;
 use std::array::TryFromSliceError;
@@ -72,13 +73,9 @@ impl RespValue {
 
     fn parse_integer(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         Self::parse_until_crlf(input).and_then(|(num_bytes, rest)| {
-            std::str::from_utf8(num_bytes)
-                .map_err(|e| ParseError::ByteError(e.to_string()))
-                .and_then(|s| {
-                    s.parse::<i64>()
-                        .map(|i| (RespValue::Integer(i), rest))
-                        .map_err(|e| ParseError::ByteError(e.to_string()))
-                })
+            atoi::<i64>(num_bytes)
+                .ok_or_else(|| ParseError::ByteError(String::from_utf8_lossy(num_bytes).into()))
+                .map(|i| (RespValue::Integer(i), rest))
         })
     }
 
