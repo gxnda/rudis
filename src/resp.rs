@@ -111,7 +111,6 @@ impl RespValue {
 
     fn parse_array(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
         let (end, mut next_start) = Self::find_crlf(input, start)?;
-        dbg!(input, start, end, next_start);
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
             ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
         })?;
