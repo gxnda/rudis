@@ -71,6 +71,14 @@ impl RespValue {
         })
     }
 
+    fn check_simple_string(input: &[u8]) -> (bool, &[u8]) {
+        let (s, rest) = match Self::parse_until_crlf(input) {
+            Ok(result) => result,
+            Err(_) => return (false, &[]),
+        };
+        (core::str::from_utf8(s).is_ok(), rest)
+    }
+
     fn parse_integer(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         Self::parse_until_crlf(input).and_then(|(num_bytes, rest)| {
             atoi::<i64>(num_bytes)
@@ -79,12 +87,17 @@ impl RespValue {
         })
     }
 
+    fn check_integer(input: &[u8]) -> (bool, &[u8]) {
+        match Self::parse_until_crlf(input) {
+            Ok((num_bytes, rest)) => (atoi::<i64>(num_bytes).is_some(), rest),
+            Err(_) => return (false, &[]),
+        }
+    }
+
     fn parse_bulk_string(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         let (len_bytes, rest) = Self::parse_until_crlf(input)?;
-        let len = std::str::from_utf8(len_bytes)
-            .map_err(|e| ParseError::ByteError(e.to_string()))?
-            .parse::<i64>()
-            .map_err(|e| ParseError::NotAnInteger(e.to_string()))?;
+        let len = atoi::<i64>(len_bytes)
+            .ok_or_else(|| ParseError::NotAnInteger("couldn't parse bulk string len".into()))?;
 
         match len {
             // null bulk string
@@ -108,6 +121,26 @@ impl RespValue {
             }
             _ => Err(ParseError::LengthError(len)),
         }
+    }
+
+    fn check_bulk_string(input: &[u8]) -> (bool, &[u8]) {
+        let (len_bytes, rest) = match Self::parse_until_crlf(&input) {
+            Ok(result) => result,
+            Err(_) => return (false, &[]),
+        };
+        let len = match atoi::<i64>(len_bytes) {
+            Some(len) => len,
+            None => return (false, &[]),
+        };
+        let is_valid = match len {
+            -1 => true,
+            0 => rest.len() >= 2 && &rest[..2] == b"\r\n",
+            len if len > 0 => {
+                rest.len() >= len as usize + 2 && &rest[len as usize..len as usize + 2] == b"\r\n"
+            }
+            _ => false,
+        };
+        (is_valid, rest)
     }
 
     fn parse_array(chars: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
@@ -137,12 +170,47 @@ impl RespValue {
         }
     }
 
+    fn check_array(chars: &[u8]) -> (bool, &[u8]) {
+        let (len_bytes, mut rest) = match Self::parse_until_crlf(chars) {
+            Ok(result) => result,
+            Err(_) => return (false, &[]),
+        };
+        let len = match atoi::<i64>(len_bytes) {
+            Some(len) => len,
+            None => return (false, &[]),
+        };
+        match len {
+            -1 | 0 => (true, rest),
+            len if len > 0 => {
+                let mut is_valid = true;
+                let mut new_valid;
+                for _ in 0..len {
+                    (new_valid, rest) = Self::is_valid(rest);
+                    is_valid &= new_valid;
+                    if !is_valid {
+                        return (false, rest);
+                    }
+                }
+                return (is_valid, rest);
+            }
+            _ => return (false, &[]),
+        }
+    }
+
     fn parse_error(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         Self::parse_until_crlf(input).and_then(|(s, rest)| {
             String::from_utf8(s.to_vec())
                 .map(|s| (RespValue::Error(s), rest))
                 .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))
         })
+    }
+
+    fn check_error(input: &[u8]) -> (bool, &[u8]) {
+        let (s, rest) = match Self::parse_until_crlf(input) {
+            Ok(result) => result,
+            Err(_) => return (false, &[]),
+        };
+        (core::str::from_utf8(s).is_ok(), rest)
     }
 
     fn parse_inline(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
@@ -165,6 +233,14 @@ impl RespValue {
         })
     }
 
+    fn check_inline(input: &[u8]) -> (bool, &[u8]) {
+        let (s, rest) = match Self::parse_until_crlf(input) {
+            Ok(result) => result,
+            Err(_) => return (false, &[]),
+        };
+        (!s.contains(&b' '), rest)
+    }
+
     pub fn parse(input: &[u8]) -> Result<(RespValue, &[u8]), ParseError> {
         if input.is_empty() {
             return Err(ParseError::Incomplete);
@@ -177,6 +253,20 @@ impl RespValue {
             b'$' => Self::parse_bulk_string(&input[1..]),
             b'*' => Self::parse_array(&input[1..]),
             _ => Self::parse_inline(input),
+        }
+    }
+
+    pub fn is_valid(bytes: &[u8]) -> (bool, &[u8]) {
+        if bytes.is_empty() {
+            return (false, &[]);
+        }
+        match bytes[0] {
+            b'+' => Self::check_simple_string(&bytes[1..]),
+            b'-' => Self::check_error(&bytes[1..]),
+            b':' => Self::check_integer(&bytes[1..]),
+            b'$' => Self::check_bulk_string(&bytes[1..]),
+            b'*' => Self::check_array(&bytes[1..]),
+            _ => Self::check_inline(bytes),
         }
     }
 
