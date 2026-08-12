@@ -1,3 +1,4 @@
+use bytes::{Buf, BytesMut};
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -15,7 +16,7 @@ use crate::{
 pub struct AOF {
     config: Arc<Config>,
     reader: Option<BufReader<File>>,
-    buffer: Vec<u8>,
+    buffer: BytesMut,
     write_mutex: Mutex<Option<tokio::fs::File>>,
 }
 
@@ -29,7 +30,7 @@ impl AOF {
         Ok(AOF {
             config,
             reader: None,
-            buffer: Vec::new(),
+            buffer: BytesMut::new(),
             write_mutex: Mutex::new(Some(file)),
         })
     }
@@ -79,11 +80,9 @@ impl AOF {
         self.ensure_reader()?;
         let reader = self.reader.as_mut().unwrap();
         loop {
-            match RespValue::parse(&self.buffer) {
-                Ok((resp, bytes_remaining)) => {
-                    // if it's successful, remove the bit we read from the buffer
-                    let consumed = self.buffer.len() - bytes_remaining.len();
-                    self.buffer.drain(..consumed); // consumed is &[u8]
+            match RespValue::parse(&self.buffer.clone().freeze()) {
+                Ok((resp, consumed)) => {
+                    self.buffer.advance(consumed);
                     return Ok(Some(resp));
                 }
                 Err(ParseError::Incomplete) => {

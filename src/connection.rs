@@ -1,7 +1,7 @@
 use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
-use bytes::Buf;
 use bytes::BytesMut;
+use bytes::{Buf, Bytes};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, time::SystemTimeError};
@@ -55,12 +55,11 @@ where
     }
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        let buffer_ref: &[u8] = self.buffer.as_ref();
-        match RespValue::parse(buffer_ref) {
-            Ok((resp, remainder)) => {
-                let consumed_len = buffer_ref.len() - remainder.len();
+        let frozen_buffer: Bytes = self.buffer.clone().freeze();
+        match RespValue::parse(&frozen_buffer) {
+            Ok((resp, consumed_len)) => {
                 if let Some(aof) = &self.aof {
-                    aof.append_bytes(&buffer_ref[..consumed_len])
+                    aof.append_bytes(&frozen_buffer.slice(..consumed_len))
                         .await
                         .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
