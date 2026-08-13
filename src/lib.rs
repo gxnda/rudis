@@ -6,7 +6,6 @@ pub mod storage {
         pub mod errors;
         pub mod rdb;
     }
-    pub mod clock_sync;
 }
 pub mod command;
 pub mod config;

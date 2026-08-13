@@ -15,6 +15,7 @@ atoi = "3.1.0"
 bincode = {version="2.0.1", features=["serde"]}
 bytes = {version="1.10.1", features=["serde"]}
 clap = { version = "4.5.45", features = ["derive"] }
+coarsetime = "0.1.37"
 crossbeam-skiplist = "0.1.3"
 dashmap = {version="6.1.0", features=["rayon", "serde"]}
 memchr = "2.8.3"

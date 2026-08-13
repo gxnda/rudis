@@ -1,5 +1,6 @@
 use ahash::RandomState;
 use bytes::Bytes;
+use coarsetime::Clock;
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
@@ -10,10 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-use crate::storage::clock_sync::{instant_to_unix_ms, unix_ms_to_instant};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct StorageEngine {
@@ -29,11 +28,7 @@ pub struct StorageEngine {
 #[derive(Serialize, Deserialize)]
 pub struct DataEntry {
     pub value: RedisValue,
-    #[serde(
-        serialize_with = "serialize_expiry",
-        deserialize_with = "deserialize_expiry"
-    )]
-    pub expiry: Option<Instant>,
+    pub expiry: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -64,28 +59,6 @@ where
 {
     let map = DashMap::<Bytes, DataEntry, RandomState>::deserialize(deserializer)?;
     Ok(Arc::new(map))
-}
-
-fn serialize_expiry<S>(expiry: &Option<Instant>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match *expiry {
-        Some(exp) if Instant::now() < exp => serializer.serialize_u64(instant_to_unix_ms(exp)),
-        _ => serializer.serialize_u64(0),
-    }
-}
-
-fn deserialize_expiry<'de, D>(deserializer: D) -> Result<Option<Instant>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let millis = u64::deserialize(deserializer)?;
-    if millis == 0 {
-        return Ok(None);
-    }
-    let expiry: Instant = unix_ms_to_instant(millis);
-    Ok((expiry > Instant::now()).then_some(expiry))
 }
 
 impl Serialize for RedisValue {
@@ -240,7 +213,7 @@ impl DataEntry {
         self.is_older_than_now()
     }
 
-    fn is_older_than(&self, instant: Instant) -> bool {
+    fn is_older_than(&self, instant: u64) -> bool {
         if let Some(exp) = self.expiry {
             exp < instant
         } else {
@@ -250,7 +223,7 @@ impl DataEntry {
 
     #[inline]
     fn is_older_than_now(&self) -> bool {
-        self.is_older_than(Instant::now())
+        self.is_older_than(Clock::now_since_epoch().as_millis())
     }
 }
 
@@ -282,7 +255,7 @@ impl StorageEngine {
     }
 
     #[inline]
-    pub fn get_at(&self, key: &Bytes, now: Instant) -> Option<RedisValue> {
+    pub fn get_at(&self, key: &Bytes, now: u64) -> Option<RedisValue> {
         if let Some(entry) = self.data.get(key) {
             if entry.is_older_than(now) {
                 drop(entry);
@@ -295,34 +268,46 @@ impl StorageEngine {
     }
 
     pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
-        self.get_at(key, Instant::now())
+        self.get_at(key, Clock::now_since_epoch().as_millis())
     }
 
-    pub fn set(&self, key: Bytes, value: RedisValue, expiry: Option<Instant>) {
-        self.data.insert(key, DataEntry { value, expiry });
+    pub fn set(&self, key: Bytes, value: RedisValue, expiry_instant: Option<u64>) {
+        self.data.insert(
+            key,
+            DataEntry {
+                value,
+                expiry: expiry_instant,
+            },
+        );
     }
 
+    #[inline]
     pub fn del(&self, key: &Bytes) -> bool {
         self.data.remove(key).is_some()
     }
 
-    pub fn set_expire(&self, key: &Bytes, expiry: Option<Instant>) {
+    pub fn set_expire(&self, key: &Bytes, expiry_instant: Option<u64>) {
         if let Some(mut entry) = self.data.get_mut(key) {
-            entry.expiry = expiry;
+            entry.expiry = expiry_instant;
         }
     }
 
-    pub fn get_expire(&self, key: &Bytes) -> Result<Option<Instant>, &'static str> {
+    pub fn get_expire(&self, key: &Bytes) -> Result<Option<u64>, &'static str> {
         match self.data.get(key) {
             Some(entry) => Ok(entry.expiry), // return key, None if no expiry
             None => Err("key not found"),    // key doesn't exist
         }
     }
 
-    pub fn set_expire_in(&self, key: &Bytes, duration: Duration) {
-        self.set_expire(key, Some(Instant::now() + duration));
+    #[inline]
+    pub fn set_expire_in(&self, key: &Bytes, duration_ms: u64) {
+        self.set_expire(
+            key,
+            Some(Clock::now_since_epoch().as_millis() + duration_ms),
+        );
     }
 
+    #[inline]
     pub fn exists(&self, key: &Bytes) -> bool {
         self.data.contains_key(key)
     }
@@ -381,7 +366,7 @@ impl StorageEngine {
         // Returns all keys with matching values
         let re = Regex::new(pattern)?;
         let mut matches: Vec<Bytes> = Vec::new();
-        let now = Instant::now();
+        let now = Clock::now_since_epoch().as_millis();
 
         for entry in self.data.iter() {
             // check if its expired
@@ -423,7 +408,7 @@ impl StorageEngine {
     pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // Returns all keys which match pattern
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
-        let now = Instant::now();
+        let now = Clock::now_since_epoch().as_millis();
 
         Ok(self
             .data
@@ -437,7 +422,7 @@ impl StorageEngine {
     pub fn get_matching_keys_par(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // parallel version of the above function using rayon
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
-        let now = Instant::now();
+        let now = Clock::now_since_epoch().as_millis();
         Ok(self
             .data
             .par_iter()
@@ -452,21 +437,21 @@ impl StorageEngine {
     }
 
     pub fn remove_expired(&self) {
-        self.remove_older_than(Instant::now())
+        self.remove_older_than(Clock::now_since_epoch().as_millis())
     }
 
-    pub fn remove_older_than(&self, inst: Instant) {
+    pub fn remove_older_than(&self, inst: u64) {
         self.data.retain(|_, entry| !entry.is_older_than(inst));
     }
 
     fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
-        let now = Instant::now();
+        let now = Clock::now_since_epoch().as_millis();
         data.retain(|_, entry| !entry.is_older_than(now));
     }
 
     pub fn remove_expired_par(&self) {
         // possibly faster for large dashmaps
-        let now = Instant::now();
+        let now = Clock::now_since_epoch().as_millis();
         let keys_to_remove: Vec<_> = self
             .data
             .par_iter()

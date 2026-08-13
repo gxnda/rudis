@@ -1,10 +1,10 @@
-use crate::storage::clock_sync::unix_ms_to_instant;
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
 use crate::{resp::RespValue, storage::memory::IncrError};
+use std::iter::Iterator;
+
 use atoi::atoi;
 use bytes::Bytes;
-use std::iter::Iterator;
-use std::time::{Duration, Instant};
+use coarsetime::Clock;
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub enum Command {
         condition_type: Option<Bytes>,
         condition_val: Option<Bytes>,
         get: bool,
-        ttl: Option<Instant>,
+        ttl_instant: Option<u64>,
         keep_ttl: bool,
     },
     Del {
@@ -51,7 +51,7 @@ pub enum Command {
     },
     Expire {
         key: Bytes,
-        ttl: Duration,
+        in_seconds: u64, // was Duration
     },
     Persist {
         key: Bytes,
@@ -192,7 +192,7 @@ impl Command {
                 let key = next_bulk!(args)?;
                 let value = next_bulk!(args)?;
 
-                let mut ttl = None;
+                let mut ttl_instant = None;
                 let mut condition_type = None;
                 let mut condition_val = None;
                 let mut get = false;
@@ -233,7 +233,7 @@ impl Command {
                             get = true;
                         }
                         b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
-                            if ttl.is_some() || keep_ttl {
+                            if ttl_instant.is_some() || keep_ttl {
                                 return Err(ParseError::InvalidCommand(
                                     "Expiration options are mutually exclusive".into(),
                                 ));
@@ -247,16 +247,18 @@ impl Command {
                                 .ok_or_else(|| {
                                     ParseError::InvalidDuration("Invalid expire seconds".into())
                                 })?;
-                            ttl = match arg.as_ref() {
-                                b"EX" => Some(Instant::now() + Duration::from_secs(duration_val)),
-                                b"PX" => Some(Instant::now() + Duration::from_millis(duration_val)),
-                                b"EXAT" => Some(unix_ms_to_instant(duration_val * 1000)),
-                                b"PXAT" => Some(unix_ms_to_instant(duration_val)),
+                            ttl_instant = match arg.as_ref() {
+                                b"EX" => {
+                                    Some(Clock::now_since_epoch().as_millis() + duration_val * 1000)
+                                }
+                                b"PX" => Some(Clock::now_since_epoch().as_millis() + duration_val),
+                                b"EXAT" => Some(duration_val * 1000),
+                                b"PXAT" => Some(duration_val),
                                 _ => unreachable!(),
                             }
                         }
                         b"KEEPTTL" => {
-                            if ttl.is_some() || keep_ttl {
+                            if ttl_instant.is_some() || keep_ttl {
                                 return Err(ParseError::InvalidCommand(
                                     "Expiration options are mutually exclusive".into(),
                                 ));
@@ -269,7 +271,7 @@ impl Command {
                 Ok(Command::Set {
                     key,
                     value,
-                    ttl,
+                    ttl_instant,
                     condition_type,
                     condition_val,
                     get,
@@ -392,13 +394,10 @@ impl Command {
                     });
                 }
                 let key = next_bulk!(args).unwrap();
-                let seconds: u64 = atoi::<u64>(&next_bulk!(args).unwrap())
+                let in_seconds: u64 = atoi::<u64>(&next_bulk!(args).unwrap())
                     .ok_or_else(|| ParseError::InvalidDuration("Invalid expire seconds".into()))?;
 
-                Ok(Command::Expire {
-                    key,
-                    ttl: Duration::from_secs(seconds),
-                })
+                Ok(Command::Expire { key, in_seconds })
             }
 
             b if b.eq_ignore_ascii_case(b"PERSIST") => {
@@ -583,7 +582,7 @@ impl Command {
             Command::Set {
                 key,
                 value,
-                ttl,
+                ttl_instant,
                 condition_type: _,
                 condition_val: _,
                 keep_ttl,
@@ -594,13 +593,9 @@ impl Command {
                     RespValue::BulkString(Some(key.clone())),
                     RespValue::BulkString(Some(value.clone())),
                 ];
-                if let Some(expire) = ttl {
-                    let now = Instant::now();
-                    let millis = if *expire > now {
-                        expire.duration_since(now).as_millis() as u64
-                    } else {
-                        0
-                    };
+                if let Some(expire) = ttl_instant {
+                    let now = Clock::now_since_epoch().as_millis();
+                    let millis = if *expire > now { expire - now } else { 0 };
                     array.push(RespValue::BulkString(Some(Bytes::from("PX"))));
                     array.push(RespValue::BulkString(Some(Bytes::from(millis.to_string()))));
                 } else if *keep_ttl {
@@ -652,14 +647,11 @@ impl Command {
                 RespValue::BulkString(Some(Bytes::from("TTL"))),
                 RespValue::BulkString(Some(key.clone())),
             ])),
-            Command::Expire { key, ttl } => {
-                let seconds = ttl.as_secs();
-                RespValue::Array(Some(vec![
-                    RespValue::BulkString(Some(Bytes::from("EXPIRE"))),
-                    RespValue::BulkString(Some(key.clone())),
-                    RespValue::BulkString(Some(Bytes::from(seconds.to_string()))),
-                ]))
-            }
+            Command::Expire { key, in_seconds } => RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from("EXPIRE"))),
+                RespValue::BulkString(Some(key.clone())),
+                RespValue::BulkString(Some(Bytes::from(in_seconds.to_string()))),
+            ])),
             Command::Persist { key } => RespValue::Array(Some(vec![
                 RespValue::BulkString(Some(Bytes::from("PERSIST"))),
                 RespValue::BulkString(Some(key.clone())),
@@ -802,7 +794,7 @@ impl Command {
             Command::Set {
                 key,
                 value,
-                ttl,
+                ttl_instant,
                 condition_type,
                 condition_val,
                 keep_ttl,
@@ -859,7 +851,7 @@ impl Command {
                     };
                 }
                 if do_operation {
-                    let mut new_ttl: Option<Instant> = *ttl;
+                    let mut new_ttl: Option<u64> = *ttl_instant;
                     if *keep_ttl {
                         if let Ok(exp) = storage.get_expire(key) {
                             new_ttl = exp;
@@ -945,17 +937,17 @@ impl Command {
             },
 
             Command::TTL { key } => match storage.get_expire(key) {
-                Ok(Some(exp)) => {
-                    RespValue::Integer(exp.duration_since(Instant::now()).as_secs() as i64)
-                }
+                Ok(Some(exp_instant)) => RespValue::Integer(
+                    (exp_instant / 1000 - Clock::now_since_epoch().as_secs()) as i64,
+                ),
                 Ok(None) => RespValue::Integer(-1),
                 Err(_) => RespValue::Integer(-2),
             },
 
-            Command::Expire { key, ttl } => {
+            Command::Expire { key, in_seconds } => {
                 if storage.exists(key) {
                     // sets expire for key
-                    storage.set_expire_in(key, *ttl);
+                    storage.set_expire_in(key, *in_seconds * 1000);
                     RespValue::Integer(1)
                 } else {
                     RespValue::Integer(0)
@@ -1113,7 +1105,6 @@ mod tests {
     use super::*;
     use crate::storage::memory::StorageEngine;
     use bytes::Bytes;
-    use std::time::Instant;
 
     // Helper to create RESP command array
     fn resp_array(args: Vec<&[u8]>) -> RespValue {
@@ -1185,9 +1176,9 @@ mod tests {
         // SET with EX
         let set_cmd = resp_array(vec![b"SET", key, value, b"EX", b"10"]);
         let cmd = Command::from_resp(set_cmd).unwrap();
-        if let Command::Set { ttl, .. } = cmd {
-            assert!(ttl.is_some());
-            assert!(ttl.unwrap() > Instant::now());
+        if let Command::Set { ttl_instant, .. } = cmd {
+            assert!(ttl_instant.is_some());
+            assert!(ttl_instant.unwrap() > Clock::now_since_epoch().as_millis());
         } else {
             panic!("Not a SET command");
         }

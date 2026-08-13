@@ -1,7 +1,7 @@
 use bytes::Bytes;
+use coarsetime::Clock;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rudis::storage::memory::{RedisValue, StorageEngine};
-use std::time::Duration;
 
 fn bench_set_with_expiry(c: &mut Criterion) {
     let mut group = c.benchmark_group("expiry_set");
@@ -13,7 +13,7 @@ fn bench_set_with_expiry(c: &mut Criterion) {
                 engine.set(
                     black_box(Bytes::from_static(b"key")),
                     black_box(RedisValue::String(Bytes::from_static(b"value"))),
-                    black_box(Some(std::time::Instant::now() + Duration::from_secs(1))),
+                    black_box(Some(Clock::now_since_epoch().as_millis() + 1000)),
                 );
             },
             criterion::BatchSize::SmallInput,
@@ -27,7 +27,7 @@ fn bench_set_with_expiry(c: &mut Criterion) {
                 engine.set(
                     black_box(Bytes::from_static(b"key")),
                     black_box(RedisValue::String(Bytes::from_static(b"value"))),
-                    black_box(Some(std::time::Instant::now() + Duration::from_secs(3600))),
+                    black_box(Some(Clock::now_since_epoch().as_millis() + 3_600_000)),
                 );
             },
             criterion::BatchSize::SmallInput,
@@ -52,10 +52,7 @@ fn bench_expire_command(c: &mut Criterion) {
                 engine
             },
             |engine| {
-                engine.set_expire_in(
-                    black_box(&Bytes::from_static(b"key")),
-                    black_box(Duration::from_secs(60)),
-                );
+                engine.set_expire_in(black_box(&Bytes::from_static(b"key")), black_box(60_000));
             },
             criterion::BatchSize::SmallInput,
         );
@@ -67,7 +64,7 @@ fn bench_expire_command(c: &mut Criterion) {
             |engine| {
                 engine.set_expire_in(
                     black_box(&Bytes::from_static(b"nonexistent")),
-                    black_box(Duration::from_secs(60)),
+                    black_box(60_000),
                 );
             },
             criterion::BatchSize::SmallInput,
@@ -105,7 +102,7 @@ fn bench_ttl_command(c: &mut Criterion) {
                 engine.set(
                     Bytes::from_static(b"key"),
                     RedisValue::String(Bytes::from_static(b"value")),
-                    Some(std::time::Instant::now() + Duration::from_secs(60)),
+                    Some(Clock::now_since_epoch().as_millis() + 60_000),
                 );
                 engine
             },
@@ -129,7 +126,7 @@ fn bench_persist_command(c: &mut Criterion) {
                 engine.set(
                     Bytes::from_static(b"key"),
                     RedisValue::String(Bytes::from_static(b"value")),
-                    Some(std::time::Instant::now() + Duration::from_secs(60)),
+                    Some(Clock::now_since_epoch().as_millis() + 60_000),
                 );
                 engine
             },
@@ -138,7 +135,7 @@ fn bench_persist_command(c: &mut Criterion) {
                 engine.set(
                     Bytes::from_static(b"key"),
                     RedisValue::String(Bytes::from_static(b"value")),
-                    Some(std::time::Instant::now() + Duration::from_secs(60)),
+                    Some(Clock::now_since_epoch().as_millis() + 60_000),
                 );
             },
             criterion::BatchSize::SmallInput,
