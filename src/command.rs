@@ -810,6 +810,7 @@ impl Command {
             } => {
                 let mut do_operation: bool = true;
 
+                let got = storage.get(key);
                 // check if it's a string
                 if let Some(existing) = storage.get(key) {
                     if !matches!(existing, RedisValue::String(_)) {
@@ -825,7 +826,7 @@ impl Command {
                             return RespValue::Error("syntax error".to_string());
                         };
                         do_operation = matches!(
-                            storage.get(key),
+                            &got,
                             Some(RedisValue::String(unwrapped)) if unwrapped == condition_val
                         );
                     }
@@ -834,7 +835,7 @@ impl Command {
                             return RespValue::Error("syntax error".to_string());
                         };
                         do_operation = !matches!(
-                            storage.get(key),
+                            &got,
                             Some(RedisValue::String(unwrapped)) if unwrapped == condition_val
                         );
                     }
@@ -851,7 +852,7 @@ impl Command {
                 }
                 let mut prev: Option<Bytes> = None;
                 if *get {
-                    prev = if let Some(RedisValue::String(unwrapped)) = storage.get(key) {
+                    prev = if let Some(RedisValue::String(unwrapped)) = got {
                         Some(unwrapped)
                     } else {
                         None
