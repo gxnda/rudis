@@ -223,7 +223,7 @@ impl DataEntry {
 
     #[inline]
     fn is_older_than_now(&self) -> bool {
-        self.is_older_than(Clock::now_since_epoch().as_millis())
+        self.is_older_than(Clock::recent_since_epoch().as_millis())
     }
 }
 
@@ -268,7 +268,7 @@ impl StorageEngine {
     }
 
     pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
-        self.get_at(key, Clock::now_since_epoch().as_millis())
+        self.get_at(key, Clock::recent_since_epoch().as_millis())
     }
 
     pub fn set(&self, key: Bytes, value: RedisValue, expiry_instant: Option<u64>) {
@@ -303,7 +303,7 @@ impl StorageEngine {
     pub fn set_expire_in(&self, key: &Bytes, duration_ms: u64) {
         self.set_expire(
             key,
-            Some(Clock::now_since_epoch().as_millis() + duration_ms),
+            Some(Clock::recent_since_epoch().as_millis() + duration_ms),
         );
     }
 
@@ -366,7 +366,7 @@ impl StorageEngine {
         // Returns all keys with matching values
         let re = Regex::new(pattern)?;
         let mut matches: Vec<Bytes> = Vec::new();
-        let now = Clock::now_since_epoch().as_millis();
+        let now = Clock::recent_since_epoch().as_millis();
 
         for entry in self.data.iter() {
             // check if its expired
@@ -408,7 +408,7 @@ impl StorageEngine {
     pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // Returns all keys which match pattern
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
-        let now = Clock::now_since_epoch().as_millis();
+        let now = Clock::recent_since_epoch().as_millis();
 
         Ok(self
             .data
@@ -422,7 +422,7 @@ impl StorageEngine {
     pub fn get_matching_keys_par(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // parallel version of the above function using rayon
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
-        let now = Clock::now_since_epoch().as_millis();
+        let now = Clock::recent_since_epoch().as_millis();
         Ok(self
             .data
             .par_iter()
@@ -437,7 +437,7 @@ impl StorageEngine {
     }
 
     pub fn remove_expired(&self) {
-        self.remove_older_than(Clock::now_since_epoch().as_millis())
+        self.remove_older_than(Clock::recent_since_epoch().as_millis())
     }
 
     pub fn remove_older_than(&self, inst: u64) {
@@ -445,13 +445,13 @@ impl StorageEngine {
     }
 
     fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
-        let now = Clock::now_since_epoch().as_millis();
+        let now = Clock::recent_since_epoch().as_millis();
         data.retain(|_, entry| !entry.is_older_than(now));
     }
 
     pub fn remove_expired_par(&self) {
         // possibly faster for large dashmaps
-        let now = Clock::now_since_epoch().as_millis();
+        let now = Clock::recent_since_epoch().as_millis();
         let keys_to_remove: Vec<_> = self
             .data
             .par_iter()

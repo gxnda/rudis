@@ -248,10 +248,12 @@ impl Command {
                                     ParseError::InvalidDuration("Invalid expire seconds".into())
                                 })?;
                             ttl_instant = match arg.as_ref() {
-                                b"EX" => {
-                                    Some(Clock::now_since_epoch().as_millis() + duration_val * 1000)
+                                b"EX" => Some(
+                                    Clock::recent_since_epoch().as_millis() + duration_val * 1000,
+                                ),
+                                b"PX" => {
+                                    Some(Clock::recent_since_epoch().as_millis() + duration_val)
                                 }
-                                b"PX" => Some(Clock::now_since_epoch().as_millis() + duration_val),
                                 b"EXAT" => Some(duration_val * 1000),
                                 b"PXAT" => Some(duration_val),
                                 _ => unreachable!(),
@@ -594,7 +596,7 @@ impl Command {
                     RespValue::BulkString(Some(value.clone())),
                 ];
                 if let Some(expire) = ttl_instant {
-                    let now = Clock::now_since_epoch().as_millis();
+                    let now = Clock::recent_since_epoch().as_millis();
                     let millis = if *expire > now { expire - now } else { 0 };
                     array.push(RespValue::BulkString(Some(Bytes::from("PX"))));
                     array.push(RespValue::BulkString(Some(Bytes::from(millis.to_string()))));
@@ -938,7 +940,7 @@ impl Command {
 
             Command::TTL { key } => match storage.get_expire(key) {
                 Ok(Some(exp_instant)) => RespValue::Integer(
-                    (exp_instant / 1000 - Clock::now_since_epoch().as_secs()) as i64,
+                    (exp_instant / 1000 - Clock::recent_since_epoch().as_secs()) as i64,
                 ),
                 Ok(None) => RespValue::Integer(-1),
                 Err(_) => RespValue::Integer(-2),
@@ -1178,7 +1180,7 @@ mod tests {
         let cmd = Command::from_resp(set_cmd).unwrap();
         if let Command::Set { ttl_instant, .. } = cmd {
             assert!(ttl_instant.is_some());
-            assert!(ttl_instant.unwrap() > Clock::now_since_epoch().as_millis());
+            assert!(ttl_instant.unwrap() > Clock::recent_since_epoch().as_millis());
         } else {
             panic!("Not a SET command");
         }

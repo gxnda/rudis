@@ -12,6 +12,7 @@ use crate::{
     connection::{Connection, ConnectionError},
     storage::memory::StorageEngine,
 };
+use coarsetime::Updater;
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -49,6 +50,7 @@ impl Server {
         storage: Arc<StorageEngine>,
     ) -> Result<(Self, oneshot::Sender<()>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        Updater::new(10 /* ms */).start()?;
         Ok((
             Server {
                 listener: TcpListener::bind(config.addr).await?,
