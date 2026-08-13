@@ -248,12 +248,9 @@ impl DataEntry {
         }
     }
 
+    #[inline]
     fn is_older_than_now(&self) -> bool {
-        if let Some(exp) = self.expiry {
-            exp < Instant::now()
-        } else {
-            false
-        }
+        self.is_older_than(Instant::now())
     }
 }
 
@@ -284,10 +281,10 @@ impl StorageEngine {
         }
     }
 
-    pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
+    #[inline]
+    pub fn get_at(&self, key: &Bytes, now: Instant) -> Option<RedisValue> {
         if let Some(entry) = self.data.get(key) {
-            // Passive expiration, deletes on get
-            if entry.is_expired() {
+            if entry.is_older_than(now) {
                 drop(entry);
                 self.data.remove(key);
                 return None;
@@ -295,6 +292,10 @@ impl StorageEngine {
             return Some(entry.value.clone());
         }
         None
+    }
+
+    pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
+        self.get_at(key, Instant::now())
     }
 
     pub fn set(&self, key: Bytes, value: RedisValue, expiry: Option<Instant>) {
@@ -326,6 +327,7 @@ impl StorageEngine {
         self.data.contains_key(key)
     }
 
+    #[inline]
     pub fn incr(&self, key: &Bytes) -> Result<i64, IncrError> {
         self.incr_by(key, 1)
     }

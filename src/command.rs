@@ -812,7 +812,7 @@ impl Command {
 
                 let got = storage.get(key);
                 // check if it's a string
-                if let Some(existing) = storage.get(key) {
+                if let Some(existing) = &got {
                     if !matches!(existing, RedisValue::String(_)) {
                         return RespValue::Error("WRONGTYPE".to_string());
                     }
