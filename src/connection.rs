@@ -73,7 +73,7 @@ where
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
-        const READ_TIMEOUT: Duration = Duration::from_secs(1);
+        const READ_TIMEOUT: Duration = Duration::from_secs(3);
         const CHUNK_SIZE: usize = 8192;
 
         if !self.buffer.is_empty() {
