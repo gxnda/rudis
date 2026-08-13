@@ -55,11 +55,11 @@ where
     }
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        let frozen: Bytes = self.buffer.clone().freeze(); // O(1), no malloc apparently
-        match RespValue::parse(&frozen) {
+        let frozen_buffer: Bytes = self.buffer.clone().freeze();
+        match RespValue::parse(&frozen_buffer) {
             Ok((resp, consumed_len)) => {
                 if let Some(aof) = &self.aof {
-                    aof.append_bytes(&frozen.slice(..consumed_len))
+                    aof.append_bytes(&frozen_buffer.slice(..consumed_len))
                         .await
                         .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
@@ -74,6 +74,7 @@ where
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
+        const CHUNK_SIZE: usize = 1024;
 
         // if it's empty, it will timeout waiting for more data
         if !self.buffer.is_empty() {
@@ -84,8 +85,7 @@ where
         }
 
         // reserve space for new data in our lil buffer
-        // const CHUNK_SIZE: usize = 1024;
-        // self.buffer.reserve(CHUNK_SIZE);
+        self.buffer.reserve(CHUNK_SIZE);
         match timeout(READ_TIMEOUT, self.stream.read_buf(&mut self.buffer)).await {
             Ok(Ok(0)) => {
                 // nothing else sent
@@ -102,7 +102,7 @@ where
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                 // handle a non blocking stream (idk what this is)
-                Err(e.into())
+                Ok(None)
             }
             Ok(Err(e)) => {
                 eprintln!("Error: {:?}", e);
