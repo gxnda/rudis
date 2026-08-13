@@ -76,22 +76,22 @@ where
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
         const CHUNK_SIZE: usize = 8192;
 
-        self.buffer.reserve(CHUNK_SIZE);
-        if self.buffer.is_empty() {
-            // keep looping if we got something, otherwise its just boring and empty.
-            return match self.stream.read_buf(&mut self.buffer).await {
-                Ok(0) => Ok(None),
-                Ok(_) => self.parse_buffer().await,
-                Err(e) => Err(e.into()),
-            };
+        if !self.buffer.is_empty() {
+            if let Some(frame) = self.parse_buffer().await? {
+                return Ok(Some(frame));
+            }
         }
 
-        if let Some(frame) = self.parse_buffer().await? {
-            return Ok(Some(frame));
-        }
+        self.buffer.reserve(CHUNK_SIZE);
 
         return match timeout(READ_TIMEOUT, self.stream.read_buf(&mut self.buffer)).await {
-            Ok(Ok(0)) => Err(ConnectionError::Disconnected),
+            Ok(Ok(0)) => {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Err(ConnectionError::Disconnected);
+                }
+            }
             Ok(Ok(_)) => self.parse_buffer().await,
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
                 // handle a non blocking stream (idk what this is)
@@ -102,7 +102,7 @@ where
                 eprintln!("Error: {:?}", e);
                 Err(e.into())
             }
-            Err(_elapsed) => Ok(None),
+            Err(_elapsed) => Err(ConnectionError::Timeout),
         };
     }
 
@@ -208,17 +208,17 @@ mod connection_tests {
         assert!(matches!(result, Err(ConnectionError::RespParse(_))));
     }
 
-    // #[tokio::test]
-    // async fn test_timeout() {
-    //     let (_client, server) = duplex(1024);
-    //     let mut conn = Connection::new(server, None);
-    //
-    //     // No data written to client
-    //     match conn.read_frame().await {
-    //         Err(ConnectionError::Timeout) => {} // Expected
-    //         other => panic!("Unexpected result: {:?}", other),
-    //     }
-    // }
+    #[tokio::test]
+    async fn test_timeout() {
+        let (_client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+
+        // No data written to client
+        match conn.read_frame().await {
+            Err(ConnectionError::Timeout) => {} // Expected
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
 
     #[tokio::test]
     async fn test_clean_disconnect() {

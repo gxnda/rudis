@@ -69,7 +69,7 @@ impl Server {
             tokio::select! {
                 conn = self.listener.accept() => match conn {
                     Ok((stream, _)) => {
-                        let _permit = match self.connection_semaphore.clone().try_acquire_owned() {
+                        let permit = match self.connection_semaphore.clone().try_acquire_owned() {
                             Ok(permit) => permit,
                             Err(_) => {
                                 eprintln!("Max connections reached, dropping connection");
@@ -81,6 +81,7 @@ impl Server {
                         // async move: it moves all variables into tokio, so permit is dropped when
                         // it completes.
                         tokio::spawn(async move {
+                            let _permit = permit;
                             if let Err(e) = Self::handle_connection(stream, storage, aof).await {
                                 eprintln!("Connection error: {e}");
                             };
