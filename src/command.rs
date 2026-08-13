@@ -285,7 +285,7 @@ impl Command {
                     });
                 }
                 let keys: Vec<Bytes> = resp_to_vec!(args)?;
-                Ok(Command::Del { keys: keys })
+                Ok(Command::Del { keys })
             }
 
             b if b.eq_ignore_ascii_case(b"EXISTS") => {

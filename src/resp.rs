@@ -1,7 +1,6 @@
 use atoi::atoi;
 use bytes::Bytes;
 use memchr::memmem;
-use std::array::TryFromSliceError;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq)]
@@ -29,21 +28,6 @@ impl RespValue {
     pub fn as_integer(&self) -> Result<i64, ParseError> {
         match self {
             RespValue::Integer(i) => Ok(*i),
-            _ => Err(ParseError::NotAnInteger("".to_string())),
-        }
-    }
-
-    pub fn force_as_integer(&self) -> Result<i64, ParseError> {
-        // like as_integer, but forces Strings into int if they are numeric.
-        match self {
-            RespValue::Integer(i) => Ok(*i),
-            RespValue::BulkString(Some(bytes)) => {
-                let array: [u8; 8] = bytes
-                    .as_ref()
-                    .try_into()
-                    .map_err(|e: TryFromSliceError| ParseError::ByteError(e.to_string()))?;
-                Ok(i64::from_be_bytes(array))
-            }
             _ => Err(ParseError::NotAnInteger("".to_string())),
         }
     }

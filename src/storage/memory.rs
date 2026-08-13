@@ -450,7 +450,7 @@ impl StorageEngine {
     }
 
     pub fn remove_expired(&self) {
-        return self.remove_older_than(Instant::now());
+        self.remove_older_than(Instant::now())
     }
 
     pub fn remove_older_than(&self, inst: Instant) {
