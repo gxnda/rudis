@@ -74,7 +74,7 @@ where
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
-        const CHUNK_SIZE: usize = 1024;
+        const CHUNK_SIZE: usize = 16384;
 
         // if it's empty, it will timeout waiting for more data
         if !self.buffer.is_empty() {
