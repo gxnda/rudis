@@ -103,17 +103,15 @@ impl Server {
         // all AOF is handled in parse_buffer of Connections
         let mut conn = Connection::new(stream, aof);
         loop {
-            match conn.read_frame().await {
-                Ok(Some(resp)) => {
-                    let cmd: Command =
-                        Command::from_resp(resp).map_err(ServerError::Parse)?;
+            match conn.read_frame().await? {
+                Some(resp) => {
+                    let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
                     conn.write_response(cmd.execute(&storage)).await?;
                 }
-                Ok(None) => {
+                None => {
                     // Connection closed
                     break;
                 }
-                Err(e) => return Err(e.into()),
             }
         }
         Ok(())
