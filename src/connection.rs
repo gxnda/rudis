@@ -93,11 +93,6 @@ where
                 }
             }
             Ok(Ok(_)) => self.parse_buffer().await,
-            Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => {
-                // handle a non blocking stream (idk what this is)
-                dbg!("Non-Blocking", e);
-                Ok(None)
-            }
             Ok(Err(e)) => {
                 eprintln!("Error: {:?}", e);
                 Err(e.into())
