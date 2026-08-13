@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786654646054,
+  "lastUpdate": 1786656089825,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -1305,6 +1305,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP",
             "value": 74738.41,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "419a37be79cc403a566e8501153c82620d384ac6",
+          "message": "fix: reverted to old read_frame, where it always timeouts, new system was janky on timeout or hung",
+          "timestamp": "2026-08-13T22:19:59+01:00",
+          "tree_id": "7ccbddcfab4d5032d962f0390fa714849525297f",
+          "url": "https://github.com/gxnda/rudis/commit/419a37be79cc403a566e8501153c82620d384ac6"
+        },
+        "date": 1786656088825,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 58823.53,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 61012.81,
+            "unit": "undefined"
+          },
+          {
+            "name": "SET",
+            "value": 60277.27,
+            "unit": "undefined"
+          },
+          {
+            "name": "GET",
+            "value": 61162.08,
+            "unit": "undefined"
+          },
+          {
+            "name": "INCR",
+            "value": 61012.81,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPUSH",
+            "value": 60532.69,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPUSH",
+            "value": 60679.61,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPOP",
+            "value": 60606.06,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPOP",
+            "value": 60459.49,
             "unit": "undefined"
           }
         ]
