@@ -50,7 +50,7 @@ impl Server {
         storage: Arc<StorageEngine>,
     ) -> Result<(Self, oneshot::Sender<()>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        Updater::new(10 /* ms */).start()?;
+        Updater::new(2000).start()?;
         Ok((
             Server {
                 listener: TcpListener::bind(config.addr).await?,
