@@ -2,8 +2,8 @@ use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
 use bytes::BytesMut;
 use bytes::{Buf, Bytes};
+use coarsetime::Duration;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -84,7 +84,7 @@ where
 
         self.buffer.reserve(CHUNK_SIZE);
 
-        return match timeout(READ_TIMEOUT, self.stream.read_buf(&mut self.buffer)).await {
+        return match timeout(READ_TIMEOUT.into(), self.stream.read_buf(&mut self.buffer)).await {
             Ok(Ok(0)) => {
                 if self.buffer.is_empty() {
                     return Ok(None);
