@@ -1,6 +1,6 @@
 use ahash::RandomState;
 use bytes::Bytes;
-use coarsetime::Clock;
+use coarsetime::{Clock, Duration};
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
@@ -11,7 +11,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -470,7 +469,7 @@ impl StorageEngine {
 
         // starts active expiration in bg
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let mut interval = tokio::time::interval(Duration::from_secs(5).into());
             while !child_token.is_cancelled() {
                 tokio::select! {
                     _ = child_token.cancelled() => break,

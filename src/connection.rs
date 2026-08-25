@@ -72,9 +72,17 @@ where
     }
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(3);
         const CHUNK_SIZE: usize = 8192;
+        return self.prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE).await;
+    }
+
+    pub async fn prealloced_read_frame(
+        &mut self,
+        read_timeout: &Duration,
+        chunk_size: &usize,
+    ) -> Result<Option<RespValue>, ConnectionError> {
+        // Reads complete RESP objects from stream
 
         if !self.buffer.is_empty() {
             if let Some(frame) = self.parse_buffer().await? {
@@ -82,9 +90,14 @@ where
             }
         }
 
-        self.buffer.reserve(CHUNK_SIZE);
+        self.buffer.reserve(*chunk_size);
 
-        return match timeout(READ_TIMEOUT.into(), self.stream.read_buf(&mut self.buffer)).await {
+        return match timeout(
+            (*read_timeout).into(),
+            self.stream.read_buf(&mut self.buffer),
+        )
+        .await
+        {
             Ok(Ok(0)) => {
                 if self.buffer.is_empty() {
                     return Ok(None);

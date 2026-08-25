@@ -12,7 +12,7 @@ use crate::{
     connection::{Connection, ConnectionError},
     storage::memory::StorageEngine,
 };
-use coarsetime::Updater;
+use coarsetime::{Duration, Updater};
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -105,8 +105,14 @@ impl Server {
     ) -> Result<(), ServerError> {
         // all AOF is handled in parse_buffer of Connections
         let mut conn = Connection::new(stream, aof);
+        const READ_TIMEOUT: Duration = Duration::from_secs(3);
+        const CHUNK_SIZE: usize = 8192;
         loop {
-            match conn.read_frame().await? {
+            // TODO: Is this loop actually used? What happens if a command is incomplete here
+            match conn
+                .prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE)
+                .await?
+            {
                 Some(resp) => {
                     let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
                     conn.write_response(cmd.execute(&storage)).await?;
