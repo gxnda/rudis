@@ -56,15 +56,19 @@ where
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         let frozen_buffer: Bytes = self.buffer.clone().freeze();
-        match RespValue::parse(&frozen_buffer) {
-            Ok((resp, consumed_len)) => {
-                if let Some(aof) = &self.aof {
-                    aof.append_bytes(&frozen_buffer.slice(..consumed_len))
-                        .await
-                        .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+        match RespValue::rough_check(&self.buffer) {
+            Ok(end_index) => {
+                match RespValue::parse_checked(&self.buffer.split_to(end_index).freeze()) {
+                    Ok((resp, consumed_len)) => {
+                        if let Some(aof) = &self.aof {
+                            aof.append_bytes(&frozen_buffer.slice(..consumed_len))
+                                .await
+                                .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+                        }
+                        Ok(Some(resp))
+                    }
+                    Err(e) => Err(ConnectionError::RespParse(e.to_string())),
                 }
-                self.buffer.advance(consumed_len); // done with these bytes now
-                Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
             Err(e) => Err(ConnectionError::RespParse(e.to_string())),
@@ -92,26 +96,30 @@ where
 
         self.buffer.reserve(*chunk_size);
 
-        return match timeout(
-            (*read_timeout).into(),
-            self.stream.read_buf(&mut self.buffer),
-        )
-        .await
-        {
-            Ok(Ok(0)) => {
-                if self.buffer.is_empty() {
-                    return Ok(None);
-                } else {
-                    return Err(ConnectionError::Disconnected);
+        timeout((*read_timeout).into(), async {
+            loop {
+                self.buffer.reserve(*chunk_size);
+                match self.stream.read_buf(&mut self.buffer).await {
+                    Ok(0) => {
+                        if self.buffer.is_empty() {
+                            return Ok(None);
+                        } else {
+                            // if we get nothing more but there's still stuff in the buffer)
+                            return Err(ConnectionError::Disconnected);
+                        }
+                    }
+                    Ok(_) => {
+                        if let Some(frame) = self.parse_buffer().await? {
+                            return Ok(Some(frame));
+                        }
+                        // else continue looping, still not complete and we're still getting data
+                    }
+                    Err(e) => return Err(e.into()),
                 }
             }
-            Ok(Ok(_)) => self.parse_buffer().await,
-            Ok(Err(e)) => {
-                eprintln!("Error: {:?}", e);
-                Err(e.into())
-            }
-            Err(_elapsed) => Err(ConnectionError::Timeout),
-        };
+        })
+        .await
+        .map_err(|_| ConnectionError::Timeout)?
     }
 
     pub async fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
@@ -150,8 +158,7 @@ mod connection_tests {
 
         client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
 
-        let frame = conn.read_frame().await.unwrap();
-        assert!(frame.is_none());
+        assert!(conn.read_frame().await.is_err());
 
         client.write_all(b"$3\r\nkey\r\n").await.unwrap();
         let frame = conn.read_frame().await.unwrap();
@@ -249,7 +256,8 @@ mod connection_tests {
         drop(client); // Disconnect after partial command
 
         // First read: partial command -> None
-        assert!(conn.read_frame().await.unwrap().is_none());
+        let res = conn.read_frame().await;
+        assert!(res.is_err());
 
         // Second read: detects disconnect with partial buffer
         match conn.read_frame().await {

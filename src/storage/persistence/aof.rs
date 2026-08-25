@@ -80,7 +80,8 @@ impl AOF {
         self.ensure_reader()?;
         let reader = self.reader.as_mut().unwrap();
         loop {
-            match RespValue::parse(&self.buffer.clone().freeze()) {
+            // all resp things are checked first before added to aof in connection
+            match RespValue::parse_checked(&self.buffer.clone().freeze()) {
                 Ok((resp, consumed)) => {
                     self.buffer.advance(consumed);
                     return Ok(Some(resp));
