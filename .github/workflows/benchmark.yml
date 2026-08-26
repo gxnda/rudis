@@ -32,7 +32,7 @@ jobs:
 
       - name: Start Stock Redis Server
         run: |
-          redis-server--daemonize yes
+          redis-server --daemonize yes
           sleep 3
 
       - name: Benchmark Rudis
