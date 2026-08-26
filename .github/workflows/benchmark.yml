@@ -71,7 +71,7 @@ jobs:
                 ratio = 0;
               }
               printf "{\"name\":\"%s ratio\", \"value\": %.2f, \"unit\": \"%%\"},\n", $1, ratio
-            }' stock_parsed.txt clone_parsed.txt > ratios_raw.txt
+            }' stock_parsed.txt rudis_parsed.txt > ratios_raw.txt
 
           sed '$ s/,$//' ratios_raw.txt > ratios_clean.txt
           echo '[' > benchmark_output.json
