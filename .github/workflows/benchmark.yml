@@ -46,7 +46,7 @@ jobs:
       - name: Clean up data
         run: |
           tr '\r' '\n' < stock_benchmark.txt > stock_clean.txt
-          tr '\r' '\n' < clone_benchmark.txt > clone_clean.txt
+          tr '\r' '\n' < rudis_benchmark.txt > rudis_clean.txt
 
       - name: Convert benchmark to JSON
         run: |
@@ -60,7 +60,7 @@ jobs:
               name = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
               if (match($2, /[0-9]+(\.[0-9]+)?/)) val = substr($2, RSTART, RLENGTH); else val = 0;
               print name, val
-          }' clone_clean.txt > clone_parsed.txt
+          }' rudis_clean.txt > rudis_parsed.txt
 
           awk 'NR==FNR {stock[$1]=$2; next}
             {
@@ -70,7 +70,7 @@ jobs:
                 ratio = 0;
               }
               printf "{\"name\":\"%s ratio\", \"value\": %.2f},\n", $1, ratio
-            }' stock_parsed.txt clone_parsed.txt > ratios_raw.txt
+            }' stock_parsed.txt rudis_parsed.txt > ratios_raw.txt
 
           sed '$ s/,$//' ratios_raw.txt > ratios_clean.txt
           echo '[' > benchmark_output.json
