@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787699721030,
+  "lastUpdate": 1787743133363,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -1857,6 +1857,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP",
             "value": 142857.14,
+            "unit": "undefined"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "310630763bd5338497b1290ee92dbf11a82dddbe",
+          "message": "chore+lint: added kernel buffer empty handle to read frame",
+          "timestamp": "2026-08-26T12:17:25+01:00",
+          "tree_id": "0316009fc1abb1a9d32d92384533f3aef123b9d7",
+          "url": "https://github.com/gxnda/rudis/commit/310630763bd5338497b1290ee92dbf11a82dddbe"
+        },
+        "date": 1787743132801,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE",
+            "value": 55772.45,
+            "unit": "undefined"
+          },
+          {
+            "name": "PING_MBULK",
+            "value": 56274.62,
+            "unit": "undefined"
+          },
+          {
+            "name": "SET",
+            "value": 57208.24,
+            "unit": "undefined"
+          },
+          {
+            "name": "GET",
+            "value": 57142.86,
+            "unit": "undefined"
+          },
+          {
+            "name": "INCR",
+            "value": 56753.69,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPUSH",
+            "value": 56689.34,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPUSH",
+            "value": 56753.69,
+            "unit": "undefined"
+          },
+          {
+            "name": "LPOP",
+            "value": 57903.88,
+            "unit": "undefined"
+          },
+          {
+            "name": "RPOP",
+            "value": 57438.25,
             "unit": "undefined"
           }
         ]
