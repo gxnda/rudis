@@ -16,6 +16,7 @@ jobs:
   benchmark:
     name: Run redis-benchmark
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
