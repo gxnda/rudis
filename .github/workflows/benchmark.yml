@@ -27,21 +27,21 @@ jobs:
 
       - name: Start Rudis Server
         run: |
-          ./target/release/rudisd --aof false &
+          ./target/release/rudisd --addr 127.0.0.1:6380 --aof false &
           sleep 3
 
       - name: Start Stock Redis Server
         run: |
-          redis-server --port 6380 --daemonize yes
+          redis-server--daemonize yes
           sleep 3
 
       - name: Benchmark Rudis
         run: |
-          redis-benchmark -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
+          redis-benchmark -p 6380 -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
 
       - name: Benchmark Stock Redis
         run: |
-          redis-benchmark -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
+          redis-benchmark -p 6379 -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
 
       - name: Clean up data
         run: |
