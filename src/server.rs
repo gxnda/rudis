@@ -107,21 +107,12 @@ impl Server {
         let mut conn = Connection::new(stream, aof);
         const READ_TIMEOUT: Duration = Duration::from_secs(3);
         const CHUNK_SIZE: usize = 8192;
-        loop {
-            // TODO: Is this loop actually used? What happens if a command is incomplete here
-            match conn
-                .prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE)
-                .await?
-            {
-                Some(resp) => {
-                    let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
-                    conn.write_response(cmd.execute(&storage)).await?;
-                }
-                None => {
-                    // Connection closed
-                    break;
-                }
-            }
+        while let Some(resp) = conn
+            .prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE)
+            .await?
+        {
+            let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
+            conn.write_response(cmd.execute(&storage)).await?;
         }
         Ok(())
     }

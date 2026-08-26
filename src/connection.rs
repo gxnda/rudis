@@ -1,7 +1,6 @@
 use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
-use bytes::BytesMut;
-use bytes::{Buf, Bytes};
+use bytes::{Bytes, BytesMut};
 use coarsetime::Duration;
 use std::sync::Arc;
 use std::{io, time::SystemTimeError};
@@ -113,6 +112,15 @@ where
                             return Ok(Some(frame));
                         }
                         // else continue looping, still not complete and we're still getting data
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // if kernel buffer is empty
+                        if self.buffer.is_empty() {
+                            return Ok(None);
+                        } else {
+                            // if we get nothing more but there's still stuff in the buffer
+                            return Err(ConnectionError::Disconnected);
+                        }
                     }
                     Err(e) => return Err(e.into()),
                 }

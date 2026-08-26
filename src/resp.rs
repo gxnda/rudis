@@ -151,9 +151,11 @@ impl RespValue {
     }
 
     fn parse_checked_at(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
-        // if start >= input.len() {
-        //     dbg!("This shouldn't be possible - it's been checked!")
-        // }
+        if start >= input.len() {
+            // Shouldn't be possible but AOF test fails without this and I cba to refactor AOF
+            // because it should all be valid if it's being loaded into AOF anyway
+            return Err(ParseError::Incomplete);
+        }
 
         match input[start] {
             b'+' => Self::parse_checked_simple_string(input, start + 1),
