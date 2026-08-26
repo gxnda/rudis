@@ -214,7 +214,6 @@ impl RespValue {
                     Ok(after_data_crlf)
                 }
             }
-
             // we need to check the array is the right length because buffer could cut it off at
             // the end of an element and we wouldn't know
             b'*' => {
