@@ -38,11 +38,11 @@ jobs:
 
       - name: Benchmark Rudis
         run: |
-          redis-benchmark -p 6380 -q -n 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
+          redis-benchmark -p 6380 -q -n 1000000 -r 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
 
       - name: Benchmark Stock Redis
         run: |
-          redis-benchmark -p 6379 -q -n 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
+          redis-benchmark -p 6379 -q -n 1000000 -r 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
 
       - name: Clean up data
         run: |
