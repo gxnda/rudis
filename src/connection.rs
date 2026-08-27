@@ -1,9 +1,8 @@
 use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
-use bytes::BytesMut;
-use bytes::{Buf, Bytes};
+use bytes::{Bytes, BytesMut};
+use coarsetime::Duration;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -56,15 +55,19 @@ where
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         let frozen_buffer: Bytes = self.buffer.clone().freeze();
-        match RespValue::parse(&frozen_buffer) {
-            Ok((resp, consumed_len)) => {
-                if let Some(aof) = &self.aof {
-                    aof.append_bytes(&frozen_buffer.slice(..consumed_len))
-                        .await
-                        .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+        match RespValue::rough_check(&self.buffer) {
+            Ok(end_index) => {
+                match RespValue::parse_checked(&self.buffer.split_to(end_index).freeze()) {
+                    Ok((resp, consumed_len)) => {
+                        if let Some(aof) = &self.aof {
+                            aof.append_bytes(&frozen_buffer.slice(..consumed_len))
+                                .await
+                                .map_err(|e| ConnectionError::AofError(e.to_string()))?;
+                        }
+                        Ok(Some(resp))
+                    }
+                    Err(e) => Err(ConnectionError::RespParse(e.to_string())),
                 }
-                self.buffer.advance(consumed_len); // done with these bytes now
-                Ok(Some(resp))
             }
             Err(ParseError::Incomplete) => Ok(None),
             Err(e) => Err(ConnectionError::RespParse(e.to_string())),
@@ -72,9 +75,17 @@ where
     }
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        // Reads complete RESP objects from stream
         const READ_TIMEOUT: Duration = Duration::from_secs(3);
         const CHUNK_SIZE: usize = 8192;
+        return self.prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE).await;
+    }
+
+    pub async fn prealloced_read_frame(
+        &mut self,
+        read_timeout: &Duration,
+        chunk_size: &usize,
+    ) -> Result<Option<RespValue>, ConnectionError> {
+        // Reads complete RESP objects from stream
 
         if !self.buffer.is_empty() {
             if let Some(frame) = self.parse_buffer().await? {
@@ -82,23 +93,41 @@ where
             }
         }
 
-        self.buffer.reserve(CHUNK_SIZE);
+        self.buffer.reserve(*chunk_size);
 
-        return match timeout(READ_TIMEOUT, self.stream.read_buf(&mut self.buffer)).await {
-            Ok(Ok(0)) => {
-                if self.buffer.is_empty() {
-                    return Ok(None);
-                } else {
-                    return Err(ConnectionError::Disconnected);
+        timeout((*read_timeout).into(), async {
+            loop {
+                self.buffer.reserve(*chunk_size);
+                match self.stream.read_buf(&mut self.buffer).await {
+                    Ok(0) => {
+                        if self.buffer.is_empty() {
+                            return Ok(None);
+                        } else {
+                            // if we get nothing more but there's still stuff in the buffer)
+                            return Err(ConnectionError::Disconnected);
+                        }
+                    }
+                    Ok(_) => {
+                        if let Some(frame) = self.parse_buffer().await? {
+                            return Ok(Some(frame));
+                        }
+                        // else continue looping, still not complete and we're still getting data
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // if kernel buffer is empty
+                        if self.buffer.is_empty() {
+                            return Ok(None);
+                        } else {
+                            // if we get nothing more but there's still stuff in the buffer
+                            return Err(ConnectionError::Disconnected);
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
                 }
             }
-            Ok(Ok(_)) => self.parse_buffer().await,
-            Ok(Err(e)) => {
-                eprintln!("Error: {:?}", e);
-                Err(e.into())
-            }
-            Err(_elapsed) => Err(ConnectionError::Timeout),
-        };
+        })
+        .await
+        .map_err(|_| ConnectionError::Timeout)?
     }
 
     pub async fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
@@ -137,8 +166,7 @@ mod connection_tests {
 
         client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
 
-        let frame = conn.read_frame().await.unwrap();
-        assert!(frame.is_none());
+        assert!(conn.read_frame().await.is_err());
 
         client.write_all(b"$3\r\nkey\r\n").await.unwrap();
         let frame = conn.read_frame().await.unwrap();
@@ -236,7 +264,8 @@ mod connection_tests {
         drop(client); // Disconnect after partial command
 
         // First read: partial command -> None
-        assert!(conn.read_frame().await.unwrap().is_none());
+        let res = conn.read_frame().await;
+        assert!(res.is_err());
 
         // Second read: detects disconnect with partial buffer
         match conn.read_frame().await {

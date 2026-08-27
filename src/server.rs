@@ -12,7 +12,7 @@ use crate::{
     connection::{Connection, ConnectionError},
     storage::memory::StorageEngine,
 };
-use coarsetime::Updater;
+use coarsetime::{Duration, Updater};
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -50,7 +50,7 @@ impl Server {
         storage: Arc<StorageEngine>,
     ) -> Result<(Self, oneshot::Sender<()>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        Updater::new(2000).start()?;
+        Updater::new(100).start()?;
         Ok((
             Server {
                 listener: TcpListener::bind(config.addr).await?,
@@ -105,17 +105,14 @@ impl Server {
     ) -> Result<(), ServerError> {
         // all AOF is handled in parse_buffer of Connections
         let mut conn = Connection::new(stream, aof);
-        loop {
-            match conn.read_frame().await? {
-                Some(resp) => {
-                    let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
-                    conn.write_response(cmd.execute(&storage)).await?;
-                }
-                None => {
-                    // Connection closed
-                    break;
-                }
-            }
+        const READ_TIMEOUT: Duration = Duration::from_secs(3);
+        const CHUNK_SIZE: usize = 8192;
+        while let Some(resp) = conn
+            .prealloced_read_frame(&READ_TIMEOUT, &CHUNK_SIZE)
+            .await?
+        {
+            let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
+            conn.write_response(cmd.execute(&storage)).await?;
         }
         Ok(())
     }

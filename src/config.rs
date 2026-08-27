@@ -1,9 +1,8 @@
+use clap::{builder::RangedU64ValueParser, Parser};
 use std::{
     net::{AddrParseError, SocketAddr},
     path::PathBuf,
 };
-
-use clap::{builder::RangedU64ValueParser, Parser};
 use thiserror::Error;
 
 #[derive(Parser, Debug, Clone)]

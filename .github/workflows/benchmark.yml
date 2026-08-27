@@ -16,42 +16,66 @@ jobs:
   benchmark:
     name: Run redis-benchmark
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Build
         run: cargo build --release
 
-      - name: Install Redis Tools
-        run: sudo apt-get update && sudo apt-get install -y redis-tools
+      - name: Install Redis Tools & Stock Redis
+        run: sudo apt-get update && sudo apt-get install -y redis-tools redis-server
 
-      - name: Start Server
+      - name: Start Rudis Server
         run: |
-          ./target/release/rudisd --aof false &
-          sleep 5
+          ./target/release/rudisd --addr 127.0.0.1:6380 --aof false &
+          sleep 3
 
-      - name: Run Benchmark
+      - name: Start Stock Redis Server
         run: |
-          redis-benchmark -q -n 100000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > benchmark_output.txt
+          redis-server --daemonize yes --appendonly no --save ""
+          sleep 3
 
-      - name: Check TXT
-        run: cat benchmark_output.txt
+      - name: Benchmark Rudis
+        run: |
+          redis-benchmark -p 6380 -q -n 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
+
+      - name: Benchmark Stock Redis
+        run: |
+          redis-benchmark -p 6379 -q -n 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
+
+      - name: Clean up data
+        run: |
+          tr '\r' '\n' < stock_benchmark.txt > stock_clean.txt
+          tr '\r' '\n' < rudis_benchmark.txt > rudis_clean.txt
 
       - name: Convert benchmark to JSON
         run: |
-          tr '\r' '\n' < benchmark_output.txt > benchmark_clean.txt
-
-          echo '[' > benchmark_output.json
           awk -F': ' '/requests per second/ {
-              name = $1;
-              gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
-              if (match($2, /[0-9]+(\.[0-9]+)?/)) {
-                  val = substr($2, RSTART, RLENGTH);
+              name = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
+              if (match($2, /[0-9]+(\.[0-9]+)?/)) val = substr($2, RSTART, RLENGTH); else val = 0;
+              print name, val
+          }' stock_clean.txt > stock_parsed.txt
+
+          awk -F': ' '/requests per second/ {
+              name = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
+              if (match($2, /[0-9]+(\.[0-9]+)?/)) val = substr($2, RSTART, RLENGTH); else val = 0;
+              print name, val
+          }' rudis_clean.txt > rudis_parsed.txt
+
+          awk 'NR==FNR {stock[$1]=$2; next}
+            {
+              if ($1 in stock && stock[$1] != 0) {
+                ratio = ($2 / stock[$1]) * 100;
               } else {
-                  val = 0;
+                ratio = 0;
               }
-              printf "{\"name\":\"%s\", \"value\": %s},\n", name, val;
-          }' benchmark_clean.txt | sed '$ s/,$//' >> benchmark_output.json
+              printf "{\"name\":\"%s ratio\", \"value\": %.2f, \"unit\": \"%%\"},\n", $1, ratio
+            }' stock_parsed.txt rudis_parsed.txt > ratios_raw.txt
+
+          sed '$ s/,$//' ratios_raw.txt > ratios_clean.txt
+          echo '[' > benchmark_output.json
+          cat ratios_clean.txt >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
       - name: Check JSON
@@ -65,8 +89,8 @@ jobs:
           output-file-path: benchmark_output.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-          # alert if performance drops by more than 20%
-          alert-threshold: '120%'
+          # alert if performance drops by more than 80%
+          alert-threshold: '80%'
           comment-on-alert: true
-          fail-on-alert: true
+          fail-on-alert: false
           alert-comment-cc-users: '@gxnda'

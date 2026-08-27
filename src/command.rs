@@ -117,7 +117,8 @@ impl Command {
             }
             _ => return Err(ParseError::InvalidCommand("Expected array".to_string())),
         }
-        .into_iter();
+        .into_iter(); // Surely theres a better way to do this - this is quite slow, maybe reverse
+                      // traversal? gets a bit tricky though
         if args.len() == 0 {
             return Err(ParseError::InvalidCommand(
                 "Empty command array".to_string(),
