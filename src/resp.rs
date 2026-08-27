@@ -162,28 +162,28 @@ impl RespValue {
         Self::parse_at(input, 0)
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(self) -> Vec<u8> {
         match self {
             RespValue::SimpleString(s) => Self::serialize_simple_string(s),
-            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt.as_ref()),
-            RespValue::Array(opt) => Self::serialize_array(opt.as_deref()),
-            RespValue::Integer(i) => Self::serialize_integer(*i),
+            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt),
+            RespValue::Array(opt) => Self::serialize_array(opt),
+            RespValue::Integer(i) => Self::serialize_integer(i),
             RespValue::Error(e) => Self::serialize_error(e),
         }
     }
 
-    fn serialize_simple_string(s: &str) -> Vec<u8> {
+    fn serialize_simple_string(s: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + s.len());
         bytes.push(b'+');
-        bytes.extend(s.as_bytes());
+        bytes.extend(Bytes::from(s));
         bytes.extend(b"\r\n");
         bytes
     }
 
-    fn serialize_error(e: &str) -> Vec<u8> {
+    fn serialize_error(e: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + e.len());
         bytes.push(b'-');
-        bytes.extend(e.as_bytes());
+        bytes.extend(Bytes::from(e));
         bytes.extend(b"\r\n");
         bytes
     }
@@ -191,12 +191,12 @@ impl RespValue {
     fn serialize_integer(i: i64) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(b':');
-        bytes.extend(i.to_string().as_bytes());
+        bytes.extend(Bytes::from(i.to_string()));
         bytes.extend(b"\r\n");
         bytes
     }
 
-    fn serialize_bulk_string(s: Option<&Bytes>) -> Vec<u8> {
+    fn serialize_bulk_string(s: Option<Bytes>) -> Vec<u8> {
         match s {
             Some(s) => {
                 let mut bytes = Vec::new();
@@ -211,12 +211,12 @@ impl RespValue {
         }
     }
 
-    fn serialize_array(opt: Option<&[RespValue]>) -> Vec<u8> {
+    fn serialize_array(opt: Option<Vec<RespValue>>) -> Vec<u8> {
         match opt {
             Some(elements) => {
-                let mut bytes = Vec::new();
+                let mut bytes: Vec<u8> = Vec::new();
                 bytes.push(b'*');
-                bytes.extend(elements.len().to_string().as_bytes());
+                bytes.extend(Bytes::from(elements.len().to_string()));
                 bytes.extend(b"\r\n");
                 for elem in elements {
                     bytes.extend(elem.serialize());

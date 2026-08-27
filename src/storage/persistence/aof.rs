@@ -54,7 +54,7 @@ impl AOF {
         self.append_bytes(resp_str.as_bytes()).await
     }
 
-    pub async fn append_command(&self, resp_command: &RespValue) -> Result<(), PersistenceError> {
+    pub async fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
         self.append_bytes(&resp_command.serialize()).await
     }
 
@@ -161,7 +161,7 @@ mod tests {
             get: false,
             keep_ttl: false,
         };
-        assert!(aof.append_command(&cmd.to_resp()).await.is_ok());
+        assert!(aof.append_command(cmd.to_resp()).await.is_ok());
 
         // Verify AOF contains serialized command
         let contents = tokio::fs::read(&config.aof_path).await.unwrap();
