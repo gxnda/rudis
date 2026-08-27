@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787850356508,
+  "lastUpdate": 1787857946098,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -413,6 +413,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP ratio",
             "value": 85.56,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "d4ac1723225fd1a9131fd245bbf246e5952c4876",
+          "message": "chore: increased key size range in benchmarks to stop overwrites",
+          "timestamp": "2026-08-27T20:06:07+01:00",
+          "tree_id": "b34d87c17073fc4cac72ac71e683cf26711b19e2",
+          "url": "https://github.com/gxnda/rudis/commit/d4ac1723225fd1a9131fd245bbf246e5952c4876"
+        },
+        "date": 1787857945566,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE ratio",
+            "value": 84.71,
+            "unit": "%"
+          },
+          {
+            "name": "PING_MBULK ratio",
+            "value": 83.84,
+            "unit": "%"
+          },
+          {
+            "name": "SET ratio",
+            "value": 83.61,
+            "unit": "%"
+          },
+          {
+            "name": "GET ratio",
+            "value": 85.19,
+            "unit": "%"
+          },
+          {
+            "name": "INCR ratio",
+            "value": 84.99,
+            "unit": "%"
+          },
+          {
+            "name": "LPUSH ratio",
+            "value": 84.71,
+            "unit": "%"
+          },
+          {
+            "name": "RPUSH ratio",
+            "value": 85.88,
+            "unit": "%"
+          },
+          {
+            "name": "LPOP ratio",
+            "value": 85.69,
+            "unit": "%"
+          },
+          {
+            "name": "RPOP ratio",
+            "value": 85.95,
             "unit": "%"
           }
         ]
