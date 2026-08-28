@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787857946098,
+  "lastUpdate": 1787936003176,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -482,6 +482,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP ratio",
             "value": 85.95,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "c4d8b0f85fac23c56387ac3aafa62286bdbb1198",
+          "message": "perf: removed dbg's + removed redundant timeout+reserve in read_frame + replaced mpsc with Notify + manually remove from TimeoutHandler",
+          "timestamp": "2026-08-28T17:40:57+01:00",
+          "tree_id": "f0e07439c13fe259da97b1862115fda8f308dcf3",
+          "url": "https://github.com/gxnda/rudis/commit/c4d8b0f85fac23c56387ac3aafa62286bdbb1198"
+        },
+        "date": 1787936002329,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE ratio",
+            "value": 83.81,
+            "unit": "%"
+          },
+          {
+            "name": "PING_MBULK ratio",
+            "value": 83.44,
+            "unit": "%"
+          },
+          {
+            "name": "SET ratio",
+            "value": 86.14,
+            "unit": "%"
+          },
+          {
+            "name": "GET ratio",
+            "value": 85.56,
+            "unit": "%"
+          },
+          {
+            "name": "INCR ratio",
+            "value": 86.36,
+            "unit": "%"
+          },
+          {
+            "name": "LPUSH ratio",
+            "value": 86.82,
+            "unit": "%"
+          },
+          {
+            "name": "RPUSH ratio",
+            "value": 87.24,
+            "unit": "%"
+          },
+          {
+            "name": "LPOP ratio",
+            "value": 86.62,
+            "unit": "%"
+          },
+          {
+            "name": "RPOP ratio",
+            "value": 85.29,
             "unit": "%"
           }
         ]
