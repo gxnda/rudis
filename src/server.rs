@@ -77,7 +77,7 @@ impl Server {
         let shutdown_rx_watcher = self.shutdown_rx.clone();
         tokio::spawn(async move {
             // double clone here :((
-            timeout_handler.watch(&shutdown_rx_watcher).await;
+            timeout_handler.watch(shutdown_rx_watcher).await;
         });
         loop {
             tokio::select! {
@@ -93,12 +93,13 @@ impl Server {
                         let storage = self.storage.clone();
                         let aof = self.aof.clone();
                         let conn = Connection::new(stream, aof);
-                        let _id = self.timeout_handler.add(conn.get_state());
+                        let id = self.timeout_handler.add(conn.get_state());
+                        let cloned_handler = self.timeout_handler.clone();
                         // async move: it moves all variables into tokio, so permit is dropped when
                         // it completes.
                         tokio::spawn(async move {
                             let _permit = permit;
-                            if let Err(e) = Self::handle_connection(conn, storage).await {
+                            if let Err(e) = Self::handle_connection(conn, storage, cloned_handler, id).await {
                                 eprintln!("Connection error: {e}");
                             };
                         });
@@ -115,19 +116,18 @@ impl Server {
     async fn handle_connection(
         mut conn: Connection<TcpStream>,
         storage: Arc<StorageEngine>,
+        timeout_handler: Arc<TimeoutHandler>,
+        id: u64,
     ) -> Result<(), ServerError> {
         // all AOF is handled in parse_buffer of Connections
-        const READ_TIMEOUT_MS: u64 = 3000;
-        const CHUNK_SIZE: usize = 8192;
-        while let Some(resp) = conn
-            .prealloced_read_frame(READ_TIMEOUT_MS, &CHUNK_SIZE)
-            .await?
-        {
+        while let Some(resp) = conn.read_frame().await? {
             let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
             conn.write_response(cmd.execute(&storage)).await?;
         }
         // I don't think I need to manually remove connection here from timeout handler because of
         // the weak reference, which means it gets popped when its done
+        // but this is faster I think?
+        timeout_handler.remove(id);
         Ok(())
     }
 }
@@ -170,9 +170,8 @@ impl TimeoutHandler {
             });
     }
 
-    pub async fn watch(&self, shutdown_rx_watcher: &watch::Receiver<bool>) {
+    pub async fn watch(&self, mut watcher: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(Duration::from_millis(1000)); // check every second
-        let mut watcher = shutdown_rx_watcher.clone();
         loop {
             tokio::select! {
                 _ = interval.tick() => {

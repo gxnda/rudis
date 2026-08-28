@@ -1,18 +1,21 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use coarsetime::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 
 pub struct ConnState {
     last_activity: AtomicU64,
-    shutdown_tx: mpsc::Sender<()>,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl ConnState {
-    pub fn new(shutdown_tx: mpsc::Sender<()>) -> ConnState {
+    pub fn new(shutdown_notify: Arc<Notify>) -> ConnState {
         ConnState {
             last_activity: AtomicU64::new(coarsetime::Instant::recent().as_ticks()),
-            shutdown_tx,
+            shutdown_notify,
         }
     }
 
@@ -27,6 +30,6 @@ impl ConnState {
     }
 
     pub fn shutdown(&self) {
-        let _ = self.shutdown_tx.try_send(());
+        self.shutdown_notify.notify_one();
     }
 }

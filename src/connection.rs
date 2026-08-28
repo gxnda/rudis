@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{self, channel};
+use tokio::sync::Notify;
 
 #[derive(Debug, Error)]
 pub enum ConnectionError {
@@ -40,7 +40,7 @@ pub struct Connection<S> {
     buffer: BytesMut,
     state: Arc<ConnState>,
     aof: Option<Arc<AOF>>,
-    shutdown_rx: mpsc::Receiver<()>,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl<S> Connection<S>
@@ -48,13 +48,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     pub fn new(stream: S, aof: Option<Arc<AOF>>) -> Self {
-        let (sender, receiver) = channel(1);
+        let notify = Arc::new(Notify::new());
         Connection {
             stream,
             buffer: BytesMut::new(),
             aof,
-            state: Arc::new(ConnState::new(sender)),
-            shutdown_rx: receiver,
+            state: Arc::new(ConnState::new(notify.clone())),
+            shutdown_notify: notify,
         }
     }
 
@@ -84,18 +84,6 @@ where
     }
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        const READ_TIMEOUT_MS: u64 = 3000;
-        const CHUNK_SIZE: usize = 8192;
-        return self
-            .prealloced_read_frame(READ_TIMEOUT_MS, &CHUNK_SIZE)
-            .await;
-    }
-
-    pub async fn prealloced_read_frame(
-        &mut self,
-        read_timeout_ms: u64,
-        chunk_size: &usize,
-    ) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
 
         if !self.buffer.is_empty() {
@@ -104,14 +92,7 @@ where
             }
         }
 
-        self.buffer.reserve(*chunk_size);
-
         loop {
-            if self.state.is_timed_out(read_timeout_ms) {
-                return Err(ConnectionError::Timeout);
-            }
-            self.buffer.reserve(*chunk_size);
-
             tokio::select! {
                 read_result = self.stream.read_buf(&mut self.buffer) => {
                     match read_result {
@@ -131,7 +112,6 @@ where
                             // else continue looping, still not complete and we're still getting data
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            dbg!(e);
                             // if kernel buffer is empty
                             if self.buffer.is_empty() {
                                 return Ok(None);
@@ -141,12 +121,11 @@ where
                             }
                         }
                         Err(e) => {
-                            dbg!(&e);
                             return Err(e.into());
                         }
                     }
                 }
-                _ = self.shutdown_rx.recv() => {
+                _ = self.shutdown_notify.notified() => {
                     return Err(ConnectionError::Disconnected)
                 }
 
@@ -200,7 +179,7 @@ mod connection_tests {
         tokio::spawn(async move {
             let t_h = TimeoutHandler::new(500);
             t_h.add(conn_state);
-            t_h.watch(&watcher_shutdown_rx).await;
+            t_h.watch(watcher_shutdown_rx).await;
         });
 
         client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
