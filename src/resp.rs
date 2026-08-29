@@ -60,7 +60,7 @@ impl RespValue {
         start: usize,
     ) -> Result<(RespValue, usize), ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
-        String::from_utf8(input[start..end].into())
+        String::from_utf8(input.slice(start..end).into())
             .map(|s| (RespValue::SimpleString(s), next_start))
             .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))
     }
@@ -70,7 +70,7 @@ impl RespValue {
         start: usize,
     ) -> Result<(RespValue, usize), ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
-        atoi::<i64>(&input[start..end])
+        atoi::<i64>(&input.slice(start..end))
             .ok_or_else(|| {
                 ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
             })
@@ -286,7 +286,9 @@ impl RespValue {
 
     fn serialize_integer(i: i64) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(23); // : + i64 + CRLF
-        write!(&mut bytes, ":{}\r\n", i).expect("Writing to Vec can't fail surely");
+        bytes.push(b':');
+        bytes.extend(itoa::Buffer::new().format(i).as_bytes());
+        bytes.extend(b"\r\n");
         bytes
     }
 
