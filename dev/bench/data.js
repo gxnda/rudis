@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787936003176,
+  "lastUpdate": 1787968135918,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -552,6 +552,130 @@ window.BENCHMARK_DATA = {
             "name": "RPOP ratio",
             "value": 85.29,
             "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "c3ea42bd4f085292187190c883225705e602de69",
+          "message": "chore/perf?: hopefully optimised benchmark.yml (used AI :( )",
+          "timestamp": "2026-08-29T02:18:36+01:00",
+          "tree_id": "4c29a97269f41eef02c07567d1fab98505ac2275",
+          "url": "https://github.com/gxnda/rudis/commit/c3ea42bd4f085292187190c883225705e602de69"
+        },
+        "date": 1787968135298,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "GET ratio",
+            "value": 69.21,
+            "unit": "%"
+          },
+          {
+            "name": "GET rudis ops/sec",
+            "value": 53070.1,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "PING_MBULK ratio",
+            "value": 69.18,
+            "unit": "%"
+          },
+          {
+            "name": "PING_MBULK rudis ops/sec",
+            "value": 52170.3,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "RPOP ratio",
+            "value": 63.83,
+            "unit": "%"
+          },
+          {
+            "name": "RPOP rudis ops/sec",
+            "value": 52687,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "LPUSH ratio",
+            "value": 69.66,
+            "unit": "%"
+          },
+          {
+            "name": "LPUSH rudis ops/sec",
+            "value": 53553.3,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "LPOP ratio",
+            "value": 65.53,
+            "unit": "%"
+          },
+          {
+            "name": "LPOP rudis ops/sec",
+            "value": 52742.6,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "INCR ratio",
+            "value": 69.5,
+            "unit": "%"
+          },
+          {
+            "name": "INCR rudis ops/sec",
+            "value": 53619.3,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "SET ratio",
+            "value": 70.3,
+            "unit": "%"
+          },
+          {
+            "name": "SET rudis ops/sec",
+            "value": 54232.9,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "RPUSH ratio",
+            "value": 71.02,
+            "unit": "%"
+          },
+          {
+            "name": "RPUSH rudis ops/sec",
+            "value": 53579.1,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "PING_INLINE ratio",
+            "value": 68.14,
+            "unit": "%"
+          },
+          {
+            "name": "PING_INLINE rudis ops/sec",
+            "value": 51832.3,
+            "unit": "ops/sec"
+          },
+          {
+            "name": "test ratio",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "test rudis ops/sec",
+            "value": 0,
+            "unit": "ops/sec"
           }
         ]
       }
