@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use atoi::atoi;
 use bytes::Bytes;
 use memchr::memmem;
@@ -269,7 +271,7 @@ impl RespValue {
     fn serialize_simple_string(s: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + s.len());
         bytes.push(b'+');
-        bytes.extend(Bytes::from(s));
+        bytes.extend(s.as_bytes());
         bytes.extend(b"\r\n");
         bytes
     }
@@ -283,23 +285,23 @@ impl RespValue {
     }
 
     fn serialize_integer(i: i64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(b':');
-        bytes.extend(Bytes::from(i.to_string()));
-        bytes.extend(b"\r\n");
+        let mut bytes = Vec::with_capacity(23); // : + i64 + CRLF
+        write!(&mut bytes, ":{}\r\n", i).expect("Writing to Vec can't fail surely");
         bytes
     }
 
     fn serialize_bulk_string(s: Option<Bytes>) -> Vec<u8> {
         match s {
             Some(s) => {
-                let mut bytes = Vec::new();
-                bytes.push(b'$');
-                bytes.extend(s.len().to_string().as_bytes());
-                bytes.extend(b"\r\n");
-                bytes.extend(s);
-                bytes.extend(b"\r\n");
-                bytes
+                let mut len_buf = itoa::Buffer::new();
+                let len_str = len_buf.format(s.len());
+                let mut buf = Vec::with_capacity(1 + len_str.len() + 2 + s.len() + 2);
+                buf.push(b'$');
+                buf.extend(len_str.as_bytes());
+                buf.extend(b"\r\n");
+                buf.extend(&s);
+                buf.extend(b"\r\n");
+                buf
             }
             None => b"$-1\r\n".to_vec(),
         }
@@ -308,9 +310,11 @@ impl RespValue {
     fn serialize_array(opt: Option<Vec<RespValue>>) -> Vec<u8> {
         match opt {
             Some(elements) => {
+                let mut len_buf = itoa::Buffer::new();
+                let len_str = len_buf.format(elements.len());
                 let mut bytes: Vec<u8> = Vec::new();
                 bytes.push(b'*');
-                bytes.extend(Bytes::from(elements.len().to_string()));
+                bytes.extend(len_str.as_bytes());
                 bytes.extend(b"\r\n");
                 for elem in elements {
                     bytes.extend(elem.serialize());

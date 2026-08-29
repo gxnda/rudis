@@ -753,6 +753,7 @@ dependencies = [
  "criterion",
  "crossbeam-skiplist",
  "dashmap",
+ "itoa",
  "lazy_static",
  "memchr",
  "rand",
