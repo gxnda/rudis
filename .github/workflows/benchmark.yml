@@ -24,58 +24,100 @@ jobs:
         run: cargo build --release
 
       - name: Install Redis Tools & Stock Redis
-        run: sudo apt-get update && sudo apt-get install -y redis-tools redis-server
+        run: sudo apt-get update && sudo apt-get install -y redis-tools redis-server util-linux
 
-      - name: Start Rudis Server
+      - name: Run benchmarks (warm-up + N interleaved iterations)
         run: |
-          ./target/release/rudisd --addr 127.0.0.1:6380 --aof false &
-          sleep 3
+          set -euo pipefail
+          TESTS="ping,set,get,incr,lpush,rpush,lpop,rpop"
+          ITERATIONS=5
+          N_REQUESTS=1000000
+          KEYSPACE=1000000
 
-      - name: Start Stock Redis Server
+          run_rudis() {
+            taskset -c 0 ./target/release/rudisd --addr 127.0.0.1:6380 --aof false &
+            RUDIS_PID=$!
+            sleep 2
+            taskset -c 1 redis-benchmark -p 6380 -q -n "$N_REQUESTS" -r "$KEYSPACE" -t "$TESTS" --csv > "$1"
+            kill "$RUDIS_PID"
+            wait "$RUDIS_PID" 2>/dev/null || true
+          }
+
+          run_stock() {
+            redis-server --port 6379 --daemonize yes --appendonly no --save ""
+            sleep 2
+            taskset -c 1 redis-benchmark -p 6379 -q -n "$N_REQUESTS" -r "$KEYSPACE" -t "$TESTS" --csv > "$1"
+            redis-cli -p 6379 shutdown nosave || true
+            sleep 1
+          }
+
+          # get rid of warmups
+          run_rudis /tmp/warmup_rudis.csv &
+          wait
+          run_stock /tmp/warmup_stock.csv &
+          wait
+
+          # alternate benchmarks to stop bias
+          for i in $(seq 1 "$ITERATIONS"); do
+            if (( i % 2 == 0 )); then
+              run_rudis "rudis_run_${i}.csv"
+              run_stock "stock_run_${i}.csv"
+            else
+              run_stock "stock_run_${i}.csv"
+              run_rudis "rudis_run_${i}.csv"
+            fi
+          done
+
+      - name: Compute medians per test
         run: |
-          redis-server --daemonize yes --appendonly no --save ""
-          sleep 3
+          set -euo pipefail
 
-      - name: Benchmark Rudis
-        run: |
-          redis-benchmark -p 6380 -q -n 1000000 -r 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > rudis_benchmark.txt
-
-      - name: Benchmark Stock Redis
-        run: |
-          redis-benchmark -p 6379 -q -n 1000000 -r 1000000 -t ping,set,get,incr,lpush,rpush,lpop,rpop > stock_benchmark.txt
-
-      - name: Clean up data
-        run: |
-          tr '\r' '\n' < stock_benchmark.txt > stock_clean.txt
-          tr '\r' '\n' < rudis_benchmark.txt > rudis_clean.txt
-
-      - name: Convert benchmark to JSON
-        run: |
-          awk -F': ' '/requests per second/ {
-              name = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
-              if (match($2, /[0-9]+(\.[0-9]+)?/)) val = substr($2, RSTART, RLENGTH); else val = 0;
-              print name, val
-          }' stock_clean.txt > stock_parsed.txt
-
-          awk -F': ' '/requests per second/ {
-              name = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
-              if (match($2, /[0-9]+(\.[0-9]+)?/)) val = substr($2, RSTART, RLENGTH); else val = 0;
-              print name, val
-          }' rudis_clean.txt > rudis_parsed.txt
-
-          awk 'NR==FNR {stock[$1]=$2; next}
-            {
-              if ($1 in stock && stock[$1] != 0) {
-                ratio = ($2 / stock[$1]) * 100;
-              } else {
-                ratio = 0;
+          median_from_files() {
+            # $1 = glob pattern of csv files, produces "test value" lines using median
+            awk -F',' '
+              {
+                gsub(/"/, "", $1); gsub(/"/, "", $2);
+                vals[$1, ++count[$1]] = $2 + 0
               }
-              printf "{\"name\":\"%s ratio\", \"value\": %.2f, \"unit\": \"%%\"},\n", $1, ratio
-            }' stock_parsed.txt rudis_parsed.txt > ratios_raw.txt
+              END {
+                for (t in count) {
+                  n = count[t]
+                  # collect and sort values for this test
+                  m = n
+                  for (i = 1; i <= m; i++) arr[i] = vals[t, i]
+                  for (i = 1; i <= m; i++)
+                    for (j = i+1; j <= m; j++)
+                      if (arr[j] < arr[i]) { tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp }
+                  if (m % 2 == 1) med = arr[(m+1)/2]
+                  else med = (arr[m/2] + arr[m/2 + 1]) / 2
+                  print t, med
+                  delete arr
+                }
+              }
+            ' $1
+          }
 
-          sed '$ s/,$//' ratios_raw.txt > ratios_clean.txt
+          median_from_files "rudis_run_*.csv" > rudis_median.txt
+          median_from_files "stock_run_*.csv" > stock_median.txt
+
+      - name: Convert medians to JSON (ratio + raw throughput)
+        run: |
+          set -euo pipefail
+          awk 'NR==FNR { stock[$1]=$2; next }
+            {
+              rudis_val = $2
+              if ($1 in stock && stock[$1] != 0) {
+                ratio = (rudis_val / stock[$1]) * 100
+              } else {
+                ratio = 0
+              }
+              printf "{\"name\":\"%s ratio\",\"value\":%.2f,\"unit\":\"%%\"},\n", $1, ratio
+              printf "{\"name\":\"%s rudis ops/sec\",\"value\":%.2f,\"unit\":\"ops/sec\"},\n", $1, rudis_val
+            }' stock_median.txt rudis_median.txt > entries_raw.txt
+
+          sed '$ s/,$//' entries_raw.txt > entries_clean.txt
           echo '[' > benchmark_output.json
-          cat ratios_clean.txt >> benchmark_output.json
+          cat entries_clean.txt >> benchmark_output.json
           echo ']' >> benchmark_output.json
 
       - name: Check JSON
@@ -89,7 +131,6 @@ jobs:
           output-file-path: benchmark_output.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-          # alert if performance drops by more than 80%
           alert-threshold: '80%'
           comment-on-alert: true
           fail-on-alert: false
