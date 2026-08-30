@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788009937270,
+  "lastUpdate": 1788110148359,
   "repoUrl": "https://github.com/gxnda/rudis",
   "entries": {
     "Redis Clone Performance": [
@@ -758,6 +758,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "RPOP ratio",
             "value": 77.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "committer": {
+            "email": "gabriellancasterwest@gmail.com",
+            "name": "Gabriel Lancaster-West",
+            "username": "gxnda"
+          },
+          "distinct": true,
+          "id": "33cf3cda60162a3a13772e418cf35ec0217e382a",
+          "message": "Revert itoa resp optimisations\n\nThis reverts commit 732e918bf15d617ab2f425ec1d0bfc7c1534b1e8.\n\nRevert \"perf: improved serialization malloc\"\n\nThis reverts commit 376c075d68b44cf3d1008160e7fef45296ef175e.",
+          "timestamp": "2026-08-30T18:09:57+01:00",
+          "tree_id": "f0e07439c13fe259da97b1862115fda8f308dcf3",
+          "url": "https://github.com/gxnda/rudis/commit/33cf3cda60162a3a13772e418cf35ec0217e382a"
+        },
+        "date": 1788110147418,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PING_INLINE ratio",
+            "value": 76.39,
+            "unit": "%"
+          },
+          {
+            "name": "PING_MBULK ratio",
+            "value": 76.53,
+            "unit": "%"
+          },
+          {
+            "name": "SET ratio",
+            "value": 75.16,
+            "unit": "%"
+          },
+          {
+            "name": "GET ratio",
+            "value": 76.65,
+            "unit": "%"
+          },
+          {
+            "name": "INCR ratio",
+            "value": 75.85,
+            "unit": "%"
+          },
+          {
+            "name": "LPUSH ratio",
+            "value": 78.72,
+            "unit": "%"
+          },
+          {
+            "name": "RPUSH ratio",
+            "value": 77.02,
+            "unit": "%"
+          },
+          {
+            "name": "LPOP ratio",
+            "value": 76.1,
+            "unit": "%"
+          },
+          {
+            "name": "RPOP ratio",
+            "value": 76.13,
             "unit": "%"
           }
         ]
