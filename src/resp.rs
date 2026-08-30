@@ -277,7 +277,7 @@ impl RespValue {
     fn serialize_error(e: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + e.len());
         bytes.push(b'-');
-        bytes.extend(Bytes::from(e));
+        bytes.extend(e.as_bytes());
         bytes.extend(b"\r\n");
         bytes
     }
@@ -285,7 +285,9 @@ impl RespValue {
     fn serialize_integer(i: i64) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(b':');
-        bytes.extend(Bytes::from(i.to_string()));
+        bytes.extend(i.to_string().as_bytes()); // normally small, itoa slower overall in
+                                                // redis-benchmark, so this will do, I could add
+                                                // some sort of threshold where it switches
         bytes.extend(b"\r\n");
         bytes
     }
