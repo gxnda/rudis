@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="246" onload="init(evt)" viewBox="0 0 1200 246" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="246" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text><text id="details" fill="rgb(0,0,0)" x="10" y="229.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="229.00"> </text><svg id="frames" x="10" width="1180" total_samples="349888559524"><g><title>ThreadId(1)-main (22,818,246,113 samples, 6.52%)</title><rect x="0.0000%" y="181" width="6.5216%" height="15" fill="rgb(227,0,7)" fg:x="0" fg:w="22818246113"/><text x="0.2500%" y="191.50">ThreadId(..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,535,457,027 samples, 0.72%)</title><rect x="8.4362%" y="133" width="0.7246%" height="15" fill="rgb(217,0,24)" fg:x="29517455600" fg:w="2535457027"/><text x="8.6862%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,679,101,537 samples, 0.48%)</title><rect x="8.6810%" y="117" width="0.4799%" height="15" fill="rgb(221,193,54)" fg:x="30373811090" fg:w="1679101537"/><text x="8.9310%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (759,947,461 samples, 0.22%)</title><rect x="8.9437%" y="101" width="0.2172%" height="15" fill="rgb(248,212,6)" fg:x="31292965166" fg:w="759947461"/><text x="9.1937%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,880,651,241 samples, 1.11%)</title><rect x="8.1529%" y="149" width="1.1091%" height="15" fill="rgb(208,68,35)" fg:x="28526012934" fg:w="3880651241"/><text x="8.4029%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (353,751,548 samples, 0.10%)</title><rect x="9.1609%" y="133" width="0.1011%" height="15" fill="rgb(232,128,0)" fg:x="32052912627" fg:w="353751548"/><text x="9.4109%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (347,875,503 samples, 0.10%)</title><rect x="9.2620%" y="149" width="0.0994%" height="15" fill="rgb(207,160,47)" fg:x="32406664175" fg:w="347875503"/><text x="9.5120%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (942,651,929 samples, 0.27%)</title><rect x="10.1421%" y="133" width="0.2694%" height="15" fill="rgb(228,23,34)" fg:x="35485966543" fg:w="942651929"/><text x="10.3921%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (501,380,469 samples, 0.14%)</title><rect x="12.2692%" y="69" width="0.1433%" height="15" fill="rgb(218,30,26)" fg:x="42928457137" fg:w="501380469"/><text x="12.5192%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (12,260,583,141 samples, 3.50%)</title><rect x="11.0096%" y="117" width="3.5041%" height="15" fill="rgb(220,122,19)" fg:x="38521171122" fg:w="12260583141"/><text x="11.2596%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (11,396,839,413 samples, 3.26%)</title><rect x="11.2564%" y="101" width="3.2573%" height="15" fill="rgb(250,228,42)" fg:x="39384914850" fg:w="11396839413"/><text x="11.5064%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (10,438,954,199 samples, 2.98%)</title><rect x="11.5302%" y="85" width="2.9835%" height="15" fill="rgb(240,193,28)" fg:x="40342800064" fg:w="10438954199"/><text x="11.7802%" y="95.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,351,916,657 samples, 2.10%)</title><rect x="12.4125%" y="69" width="2.1012%" height="15" fill="rgb(216,20,37)" fg:x="43429837606" fg:w="7351916657"/><text x="12.6625%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,571,443,084 samples, 1.31%)</title><rect x="13.2072%" y="53" width="1.3065%" height="15" fill="rgb(206,188,39)" fg:x="46210311179" fg:w="4571443084"/><text x="13.4572%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,730,891,737 samples, 0.49%)</title><rect x="14.0190%" y="37" width="0.4947%" height="15" fill="rgb(217,207,13)" fg:x="49050862526" fg:w="1730891737"/><text x="14.2690%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (710,544,679 samples, 0.20%)</title><rect x="15.7503%" y="85" width="0.2031%" height="15" fill="rgb(231,73,38)" fg:x="55108581150" fg:w="710544679"/><text x="16.0003%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,104,492,575 samples, 8.03%)</title><rect x="9.3614%" y="149" width="8.0324%" height="15" fill="rgb(225,20,46)" fg:x="32754539678" fg:w="28104492575"/><text x="9.6114%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,430,413,781 samples, 6.98%)</title><rect x="10.4115%" y="133" width="6.9823%" height="15" fill="rgb(210,31,41)" fg:x="36428618472" fg:w="24430413781"/><text x="10.6615%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,077,277,990 samples, 2.88%)</title><rect x="14.5137%" y="117" width="2.8801%" height="15" fill="rgb(221,200,47)" fg:x="50781754263" fg:w="10077277990"/><text x="14.7637%" y="127.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (8,814,595,516 samples, 2.52%)</title><rect x="14.8746%" y="101" width="2.5193%" height="15" fill="rgb(226,26,5)" fg:x="52044436737" fg:w="8814595516"/><text x="15.1246%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,039,906,424 samples, 1.44%)</title><rect x="15.9534%" y="85" width="1.4404%" height="15" fill="rgb(249,33,26)" fg:x="55819125829" fg:w="5039906424"/><text x="16.2034%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,647,650,252 samples, 0.47%)</title><rect x="16.9229%" y="69" width="0.4709%" height="15" fill="rgb(235,183,28)" fg:x="59211382001" fg:w="1647650252"/><text x="17.1729%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (196,455,041 samples, 0.06%)</title><rect x="18.0913%" y="117" width="0.0561%" height="15" fill="rgb(221,5,38)" fg:x="63299302838" fg:w="196455041"/><text x="18.3413%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,838,058,770 samples, 0.81%)</title><rect x="17.3938%" y="149" width="0.8111%" height="15" fill="rgb(247,18,42)" fg:x="60859032253" fg:w="2838058770"/><text x="17.6438%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,230,843,177 samples, 0.35%)</title><rect x="17.8532%" y="133" width="0.3518%" height="15" fill="rgb(241,131,45)" fg:x="62466247846" fg:w="1230843177"/><text x="18.1032%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (201,333,144 samples, 0.06%)</title><rect x="18.1474%" y="117" width="0.0575%" height="15" fill="rgb(249,31,29)" fg:x="63495757879" fg:w="201333144"/><text x="18.3974%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,302,630,405 samples, 11.23%)</title><rect x="6.9721%" y="165" width="11.2329%" height="15" fill="rgb(225,111,53)" fg:x="24394479123" fg:w="39302630405"/><text x="7.2221%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(2)-tokio-rt-worker (40,883,328,046 samples, 11.68%)</title><rect x="6.5216%" y="181" width="11.6847%" height="15" fill="rgb(238,160,17)" fg:x="22818246113" fg:w="40883328046"/><text x="6.7716%" y="191.50">ThreadId(2)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,476,609,908 samples, 0.71%)</title><rect x="20.1383%" y="133" width="0.7078%" height="15" fill="rgb(214,148,48)" fg:x="70461563736" fg:w="2476609908"/><text x="20.3883%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,632,516,439 samples, 0.47%)</title><rect x="20.3795%" y="117" width="0.4666%" height="15" fill="rgb(232,36,49)" fg:x="71305657205" fg:w="1632516439"/><text x="20.6295%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (732,113,958 samples, 0.21%)</title><rect x="20.6369%" y="101" width="0.2092%" height="15" fill="rgb(209,103,24)" fg:x="72206059686" fg:w="732113958"/><text x="20.8869%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,841,088,785 samples, 1.10%)</title><rect x="19.8498%" y="149" width="1.0978%" height="15" fill="rgb(229,88,8)" fg:x="69452338730" fg:w="3841088785"/><text x="20.0998%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (355,253,871 samples, 0.10%)</title><rect x="20.8461%" y="133" width="0.1015%" height="15" fill="rgb(213,181,19)" fg:x="72938173644" fg:w="355253871"/><text x="21.0961%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (345,264,780 samples, 0.10%)</title><rect x="20.9476%" y="149" width="0.0987%" height="15" fill="rgb(254,191,54)" fg:x="73293427515" fg:w="345264780"/><text x="21.1976%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (969,555,113 samples, 0.28%)</title><rect x="21.8985%" y="133" width="0.2771%" height="15" fill="rgb(241,83,37)" fg:x="76620225303" fg:w="969555113"/><text x="22.1485%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (503,549,725 samples, 0.14%)</title><rect x="23.9518%" y="69" width="0.1439%" height="15" fill="rgb(233,36,39)" fg:x="83804471064" fg:w="503549725"/><text x="24.2018%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,766,770,247 samples, 3.36%)</title><rect x="22.7636%" y="117" width="3.3630%" height="15" fill="rgb(226,3,54)" fg:x="79647075304" fg:w="11766770247"/><text x="23.0136%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (10,894,622,460 samples, 3.11%)</title><rect x="23.0128%" y="101" width="3.1137%" height="15" fill="rgb(245,192,40)" fg:x="80519223091" fg:w="10894622460"/><text x="23.2628%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (9,945,265,041 samples, 2.84%)</title><rect x="23.2842%" y="85" width="2.8424%" height="15" fill="rgb(238,167,29)" fg:x="81468580510" fg:w="9945265041"/><text x="23.5342%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,105,824,762 samples, 2.03%)</title><rect x="24.0957%" y="69" width="2.0309%" height="15" fill="rgb(232,182,51)" fg:x="84308020789" fg:w="7105824762"/><text x="24.3457%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,340,076,724 samples, 1.24%)</title><rect x="24.8861%" y="53" width="1.2404%" height="15" fill="rgb(231,60,39)" fg:x="87073768827" fg:w="4340076724"/><text x="25.1361%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,443,009,569 samples, 0.41%)</title><rect x="25.7141%" y="37" width="0.4124%" height="15" fill="rgb(208,69,12)" fg:x="89970835982" fg:w="1443009569"/><text x="25.9641%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (722,159,123 samples, 0.21%)</title><rect x="27.3490%" y="85" width="0.2064%" height="15" fill="rgb(235,93,37)" fg:x="95690991872" fg:w="722159123"/><text x="27.5990%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,094,834,671 samples, 8.03%)</title><rect x="21.0463%" y="149" width="8.0297%" height="15" fill="rgb(213,116,39)" fg:x="73638692295" fg:w="28094834671"/><text x="21.2963%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,143,746,550 samples, 6.90%)</title><rect x="22.1756%" y="133" width="6.9004%" height="15" fill="rgb(222,207,29)" fg:x="77589780416" fg:w="24143746550"/><text x="22.4256%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,319,681,415 samples, 2.95%)</title><rect x="26.1266%" y="117" width="2.9494%" height="15" fill="rgb(206,96,30)" fg:x="91413845551" fg:w="10319681415"/><text x="26.3766%" y="127.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (9,091,280,159 samples, 2.60%)</title><rect x="26.4776%" y="101" width="2.5983%" height="15" fill="rgb(218,138,4)" fg:x="92642246807" fg:w="9091280159"/><text x="26.7276%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,320,375,971 samples, 1.52%)</title><rect x="27.5554%" y="85" width="1.5206%" height="15" fill="rgb(250,191,14)" fg:x="96413150995" fg:w="5320375971"/><text x="27.8054%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,668,121,954 samples, 0.48%)</title><rect x="28.5992%" y="69" width="0.4768%" height="15" fill="rgb(239,60,40)" fg:x="100065405012" fg:w="1668121954"/><text x="28.8492%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (199,609,413 samples, 0.06%)</title><rect x="29.7746%" y="117" width="0.0570%" height="15" fill="rgb(206,27,48)" fg:x="104177869557" fg:w="199609413"/><text x="30.0246%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,846,810,526 samples, 0.81%)</title><rect x="29.0760%" y="149" width="0.8136%" height="15" fill="rgb(225,35,8)" fg:x="101733526966" fg:w="2846810526"/><text x="29.3260%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,223,478,358 samples, 0.35%)</title><rect x="29.5399%" y="133" width="0.3497%" height="15" fill="rgb(250,213,24)" fg:x="103356859134" fg:w="1223478358"/><text x="29.7899%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (202,858,522 samples, 0.06%)</title><rect x="29.8316%" y="117" width="0.0580%" height="15" fill="rgb(247,123,22)" fg:x="104377478970" fg:w="202858522"/><text x="30.0816%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,296,034,235 samples, 11.23%)</title><rect x="18.6586%" y="165" width="11.2310%" height="15" fill="rgb(231,138,38)" fg:x="65284338107" fg:w="39296034235"/><text x="18.9086%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(3)-tokio-rt-worker (40,882,356,199 samples, 11.68%)</title><rect x="18.2062%" y="181" width="11.6844%" height="15" fill="rgb(231,145,46)" fg:x="63701574159" fg:w="40882356199"/><text x="18.4562%" y="191.50">ThreadId(3)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,251,664,316 samples, 0.64%)</title><rect x="31.9044%" y="133" width="0.6435%" height="15" fill="rgb(251,118,11)" fg:x="111629935808" fg:w="2251664316"/><text x="32.1544%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,400,163,943 samples, 0.40%)</title><rect x="32.1478%" y="117" width="0.4002%" height="15" fill="rgb(217,147,25)" fg:x="112481436181" fg:w="1400163943"/><text x="32.3978%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (499,892,480 samples, 0.14%)</title><rect x="32.4051%" y="101" width="0.1429%" height="15" fill="rgb(247,81,37)" fg:x="113381707644" fg:w="499892480"/><text x="32.6551%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,637,290,136 samples, 1.04%)</title><rect x="31.6155%" y="149" width="1.0396%" height="15" fill="rgb(209,12,38)" fg:x="110618906279" fg:w="3637290136"/><text x="31.8655%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (374,596,291 samples, 0.11%)</title><rect x="32.5480%" y="133" width="0.1071%" height="15" fill="rgb(227,1,9)" fg:x="113881600124" fg:w="374596291"/><text x="32.7980%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (334,075,757 samples, 0.10%)</title><rect x="32.6550%" y="149" width="0.0955%" height="15" fill="rgb(248,47,43)" fg:x="114256196415" fg:w="334075757"/><text x="32.9050%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (941,162,631 samples, 0.27%)</title><rect x="33.5273%" y="133" width="0.2690%" height="15" fill="rgb(221,10,30)" fg:x="117308217924" fg:w="941162631"/><text x="33.7773%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (485,711,223 samples, 0.14%)</title><rect x="35.7435%" y="69" width="0.1388%" height="15" fill="rgb(210,229,1)" fg:x="125062370376" fg:w="485711223"/><text x="35.9935%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,912,738,442 samples, 3.40%)</title><rect x="34.4810%" y="117" width="3.4047%" height="15" fill="rgb(222,148,37)" fg:x="120645116102" fg:w="11912738442"/><text x="34.7310%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (11,034,383,055 samples, 3.15%)</title><rect x="34.7321%" y="101" width="3.1537%" height="15" fill="rgb(234,67,33)" fg:x="121523471489" fg:w="11034383055"/><text x="34.9821%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (10,082,021,197 samples, 2.88%)</title><rect x="35.0042%" y="85" width="2.8815%" height="15" fill="rgb(247,98,35)" fg:x="122475833347" fg:w="10082021197"/><text x="35.2542%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,009,772,945 samples, 2.00%)</title><rect x="35.8823%" y="69" width="2.0034%" height="15" fill="rgb(247,138,52)" fg:x="125548081599" fg:w="7009772945"/><text x="36.1323%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,256,333,630 samples, 1.22%)</title><rect x="36.6693%" y="53" width="1.2165%" height="15" fill="rgb(213,79,30)" fg:x="128301520914" fg:w="4256333630"/><text x="36.9193%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,439,786,024 samples, 0.41%)</title><rect x="37.4742%" y="37" width="0.4115%" height="15" fill="rgb(246,177,23)" fg:x="131118068520" fg:w="1439786024"/><text x="37.7242%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (695,510,262 samples, 0.20%)</title><rect x="39.1200%" y="85" width="0.1988%" height="15" fill="rgb(230,62,27)" fg:x="136876392509" fg:w="695510262"/><text x="39.3700%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,036,684,915 samples, 8.01%)</title><rect x="32.7505%" y="149" width="8.0130%" height="15" fill="rgb(216,154,8)" fg:x="114590272172" fg:w="28036684915"/><text x="33.0005%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,377,576,532 samples, 6.97%)</title><rect x="33.7963%" y="133" width="6.9672%" height="15" fill="rgb(244,35,45)" fg:x="118249380555" fg:w="24377576532"/><text x="34.0463%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,069,102,543 samples, 2.88%)</title><rect x="37.8857%" y="117" width="2.8778%" height="15" fill="rgb(251,115,12)" fg:x="132557854544" fg:w="10069102543"/><text x="38.1357%" y="127.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (8,818,034,585 samples, 2.52%)</title><rect x="38.2433%" y="101" width="2.5202%" height="15" fill="rgb(240,54,50)" fg:x="133808922502" fg:w="8818034585"/><text x="38.4933%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,055,054,316 samples, 1.44%)</title><rect x="39.3188%" y="85" width="1.4448%" height="15" fill="rgb(233,84,52)" fg:x="137571902771" fg:w="5055054316"/><text x="39.5688%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,631,591,372 samples, 0.47%)</title><rect x="40.2972%" y="69" width="0.4663%" height="15" fill="rgb(207,117,47)" fg:x="140995365715" fg:w="1631591372"/><text x="40.5472%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (206,913,450 samples, 0.06%)</title><rect x="41.4574%" y="117" width="0.0591%" height="15" fill="rgb(249,43,39)" fg:x="145054558465" fg:w="206913450"/><text x="41.7074%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,828,199,077 samples, 0.81%)</title><rect x="40.7635%" y="149" width="0.8083%" height="15" fill="rgb(209,38,44)" fg:x="142626957087" fg:w="2828199077"/><text x="41.0135%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,222,579,895 samples, 0.35%)</title><rect x="41.2224%" y="133" width="0.3494%" height="15" fill="rgb(236,212,23)" fg:x="144232576269" fg:w="1222579895"/><text x="41.4724%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (193,684,249 samples, 0.06%)</title><rect x="41.5165%" y="117" width="0.0554%" height="15" fill="rgb(242,79,21)" fg:x="145261471915" fg:w="193684249"/><text x="41.7665%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,281,597,616 samples, 11.23%)</title><rect x="30.3450%" y="165" width="11.2269%" height="15" fill="rgb(211,96,35)" fg:x="106173580618" fg:w="39281597616"/><text x="30.5950%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(4)-tokio-rt-worker (40,884,332,650 samples, 11.68%)</title><rect x="29.8906%" y="181" width="11.6850%" height="15" fill="rgb(253,215,40)" fg:x="104583930358" fg:w="40884332650"/><text x="30.1406%" y="191.50">ThreadId(4)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,248,310,639 samples, 0.64%)</title><rect x="43.4904%" y="133" width="0.6426%" height="15" fill="rgb(211,81,21)" fg:x="152168075407" fg:w="2248310639"/><text x="43.7404%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,376,431,996 samples, 0.39%)</title><rect x="43.7396%" y="117" width="0.3934%" height="15" fill="rgb(208,190,38)" fg:x="153039954050" fg:w="1376431996"/><text x="43.9896%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (476,053,679 samples, 0.14%)</title><rect x="43.9970%" y="101" width="0.1361%" height="15" fill="rgb(235,213,38)" fg:x="153940332367" fg:w="476053679"/><text x="44.2470%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,605,639,638 samples, 1.03%)</title><rect x="43.2051%" y="149" width="1.0305%" height="15" fill="rgb(237,122,38)" fg:x="151169832434" fg:w="3605639638"/><text x="43.4551%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (359,086,026 samples, 0.10%)</title><rect x="44.1330%" y="133" width="0.1026%" height="15" fill="rgb(244,218,35)" fg:x="154416386046" fg:w="359086026"/><text x="44.3830%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (341,717,674 samples, 0.10%)</title><rect x="44.2356%" y="149" width="0.0977%" height="15" fill="rgb(240,68,47)" fg:x="154775472072" fg:w="341717674"/><text x="44.4856%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (943,526,361 samples, 0.27%)</title><rect x="45.1133%" y="133" width="0.2697%" height="15" fill="rgb(210,16,53)" fg:x="157846218589" fg:w="943526361"/><text x="45.3633%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (512,602,099 samples, 0.15%)</title><rect x="47.1764%" y="69" width="0.1465%" height="15" fill="rgb(235,124,12)" fg:x="165064670443" fg:w="512602099"/><text x="47.4264%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,708,179,424 samples, 3.35%)</title><rect x="45.9947%" y="117" width="3.3463%" height="15" fill="rgb(224,169,11)" fg:x="160930146219" fg:w="11708179424"/><text x="46.2447%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (10,807,186,928 samples, 3.09%)</title><rect x="46.2522%" y="101" width="3.0888%" height="15" fill="rgb(250,166,2)" fg:x="161831138715" fg:w="10807186928"/><text x="46.5022%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (9,871,894,885 samples, 2.82%)</title><rect x="46.5195%" y="85" width="2.8214%" height="15" fill="rgb(242,216,29)" fg:x="162766430758" fg:w="9871894885"/><text x="46.7695%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,061,053,101 samples, 2.02%)</title><rect x="47.3229%" y="69" width="2.0181%" height="15" fill="rgb(230,116,27)" fg:x="165577272542" fg:w="7061053101"/><text x="47.5729%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,287,902,318 samples, 1.23%)</title><rect x="48.1154%" y="53" width="1.2255%" height="15" fill="rgb(228,99,48)" fg:x="168350423325" fg:w="4287902318"/><text x="48.3654%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,463,825,976 samples, 0.42%)</title><rect x="48.9226%" y="37" width="0.4184%" height="15" fill="rgb(253,11,6)" fg:x="171174499667" fg:w="1463825976"/><text x="49.1726%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (710,297,936 samples, 0.20%)</title><rect x="50.7296%" y="85" width="0.2030%" height="15" fill="rgb(247,143,39)" fg:x="177497102986" fg:w="710297936"/><text x="50.9796%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,363,418,717 samples, 8.11%)</title><rect x="44.3333%" y="149" width="8.1064%" height="15" fill="rgb(236,97,10)" fg:x="155117189746" fg:w="28363418717"/><text x="44.5833%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,690,863,513 samples, 7.06%)</title><rect x="45.3829%" y="133" width="7.0568%" height="15" fill="rgb(233,208,19)" fg:x="158789744950" fg:w="24690863513"/><text x="45.6329%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,842,282,820 samples, 3.10%)</title><rect x="49.3409%" y="117" width="3.0988%" height="15" fill="rgb(216,164,2)" fg:x="172638325643" fg:w="10842282820"/><text x="49.5909%" y="127.50"> ru..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (9,582,248,186 samples, 2.74%)</title><rect x="49.7011%" y="101" width="2.7387%" height="15" fill="rgb(220,129,5)" fg:x="173898360277" fg:w="9582248186"/><text x="49.9511%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,273,207,541 samples, 1.51%)</title><rect x="50.9326%" y="85" width="1.5071%" height="15" fill="rgb(242,17,10)" fg:x="178207400922" fg:w="5273207541"/><text x="51.1826%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,660,554,624 samples, 0.47%)</title><rect x="51.9651%" y="69" width="0.4746%" height="15" fill="rgb(242,107,0)" fg:x="181820053839" fg:w="1660554624"/><text x="52.2151%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (194,455,928 samples, 0.06%)</title><rect x="53.1483%" y="117" width="0.0556%" height="15" fill="rgb(251,28,31)" fg:x="185959809621" fg:w="194455928"/><text x="53.3983%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,870,711,746 samples, 0.82%)</title><rect x="52.4397%" y="149" width="0.8205%" height="15" fill="rgb(233,223,10)" fg:x="183480608463" fg:w="2870711746"/><text x="52.6897%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,254,559,823 samples, 0.36%)</title><rect x="52.9016%" y="133" width="0.3586%" height="15" fill="rgb(215,21,27)" fg:x="185096760386" fg:w="1254559823"/><text x="53.1516%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (197,054,660 samples, 0.06%)</title><rect x="53.2039%" y="117" width="0.0563%" height="15" fill="rgb(232,23,21)" fg:x="186154265549" fg:w="197054660"/><text x="53.4539%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,301,720,208 samples, 11.23%)</title><rect x="42.0276%" y="165" width="11.2326%" height="15" fill="rgb(244,5,23)" fg:x="147049667747" fg:w="39301720208"/><text x="42.2776%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(5)-tokio-rt-worker (40,884,302,129 samples, 11.68%)</title><rect x="41.5756%" y="181" width="11.6849%" height="15" fill="rgb(226,81,46)" fg:x="145468263008" fg:w="40884302129"/><text x="41.8256%" y="191.50">ThreadId(5)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,252,591,132 samples, 0.64%)</title><rect x="55.1684%" y="133" width="0.6438%" height="15" fill="rgb(247,70,30)" fg:x="193027981990" fg:w="2252591132"/><text x="55.4184%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,405,634,968 samples, 0.40%)</title><rect x="55.4105%" y="117" width="0.4017%" height="15" fill="rgb(212,68,19)" fg:x="193874938154" fg:w="1405634968"/><text x="55.6605%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (483,584,163 samples, 0.14%)</title><rect x="55.6740%" y="101" width="0.1382%" height="15" fill="rgb(240,187,13)" fg:x="194796988959" fg:w="483584163"/><text x="55.9240%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,593,218,534 samples, 1.03%)</title><rect x="54.8869%" y="149" width="1.0270%" height="15" fill="rgb(223,113,26)" fg:x="192043112755" fg:w="3593218534"/><text x="55.1369%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (355,758,167 samples, 0.10%)</title><rect x="55.8122%" y="133" width="0.1017%" height="15" fill="rgb(206,192,2)" fg:x="195280573122" fg:w="355758167"/><text x="56.0622%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (332,726,882 samples, 0.10%)</title><rect x="55.9139%" y="149" width="0.0951%" height="15" fill="rgb(241,108,4)" fg:x="195636331289" fg:w="332726882"/><text x="56.1639%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (954,227,068 samples, 0.27%)</title><rect x="56.7769%" y="133" width="0.2727%" height="15" fill="rgb(247,173,49)" fg:x="198655771019" fg:w="954227068"/><text x="57.0269%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (511,427,852 samples, 0.15%)</title><rect x="58.9154%" y="69" width="0.1462%" height="15" fill="rgb(224,114,35)" fg:x="206138300592" fg:w="511427852"/><text x="59.1654%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,756,117,927 samples, 3.36%)</title><rect x="57.7366%" y="117" width="3.3600%" height="15" fill="rgb(245,159,27)" fg:x="202013662781" fg:w="11756117927"/><text x="57.9866%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (10,863,367,955 samples, 3.10%)</title><rect x="57.9917%" y="101" width="3.1048%" height="15" fill="rgb(245,172,44)" fg:x="202906412753" fg:w="10863367955"/><text x="58.2417%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (9,923,246,505 samples, 2.84%)</title><rect x="58.2604%" y="85" width="2.8361%" height="15" fill="rgb(236,23,11)" fg:x="203846534203" fg:w="9923246505"/><text x="58.5104%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,120,052,264 samples, 2.03%)</title><rect x="59.0616%" y="69" width="2.0349%" height="15" fill="rgb(205,117,38)" fg:x="206649728444" fg:w="7120052264"/><text x="59.3116%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,347,195,190 samples, 1.24%)</title><rect x="59.8541%" y="53" width="1.2425%" height="15" fill="rgb(237,72,25)" fg:x="209422585518" fg:w="4347195190"/><text x="60.1041%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,489,351,734 samples, 0.43%)</title><rect x="60.6709%" y="37" width="0.4257%" height="15" fill="rgb(244,70,9)" fg:x="212280428974" fg:w="1489351734"/><text x="60.9209%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (732,943,831 samples, 0.21%)</title><rect x="62.4101%" y="85" width="0.2095%" height="15" fill="rgb(217,125,39)" fg:x="218365935058" fg:w="732943831"/><text x="62.6601%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,455,934,527 samples, 8.13%)</title><rect x="56.0090%" y="149" width="8.1329%" height="15" fill="rgb(235,36,10)" fg:x="195969058171" fg:w="28455934527"/><text x="56.2590%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,814,994,611 samples, 7.09%)</title><rect x="57.0496%" y="133" width="7.0923%" height="15" fill="rgb(251,123,47)" fg:x="199609998087" fg:w="24814994611"/><text x="57.2996%" y="143.50"> rudis::co..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,655,211,990 samples, 3.05%)</title><rect x="61.0965%" y="117" width="3.0453%" height="15" fill="rgb(221,13,13)" fg:x="213769780708" fg:w="10655211990"/><text x="61.3465%" y="127.50"> ru..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (9,400,768,795 samples, 2.69%)</title><rect x="61.4551%" y="101" width="2.6868%" height="15" fill="rgb(238,131,9)" fg:x="215024223903" fg:w="9400768795"/><text x="61.7051%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,326,113,809 samples, 1.52%)</title><rect x="62.6196%" y="85" width="1.5222%" height="15" fill="rgb(211,50,8)" fg:x="219098878889" fg:w="5326113809"/><text x="62.8696%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,940,894,809 samples, 0.55%)</title><rect x="63.5871%" y="69" width="0.5547%" height="15" fill="rgb(245,182,24)" fg:x="222484097889" fg:w="1940894809"/><text x="63.8371%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (204,527,026 samples, 0.06%)</title><rect x="64.8291%" y="117" width="0.0585%" height="15" fill="rgb(242,14,37)" fg:x="226829531427" fg:w="204527026"/><text x="65.0791%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,808,678,052 samples, 0.80%)</title><rect x="64.1418%" y="149" width="0.8027%" height="15" fill="rgb(246,228,12)" fg:x="224424992698" fg:w="2808678052"/><text x="64.3918%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,239,018,226 samples, 0.35%)</title><rect x="64.5905%" y="133" width="0.3541%" height="15" fill="rgb(213,55,15)" fg:x="225994652524" fg:w="1239018226"/><text x="64.8405%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (199,612,297 samples, 0.06%)</title><rect x="64.8875%" y="117" width="0.0571%" height="15" fill="rgb(209,9,3)" fg:x="227034058453" fg:w="199612297"/><text x="65.1375%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,304,866,713 samples, 11.23%)</title><rect x="53.7111%" y="165" width="11.2335%" height="15" fill="rgb(230,59,30)" fg:x="187928872272" fg:w="39304866713"/><text x="53.9611%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(6)-tokio-rt-worker (40,884,335,513 samples, 11.68%)</title><rect x="53.2605%" y="181" width="11.6850%" height="15" fill="rgb(209,121,21)" fg:x="186352565137" fg:w="40884335513"/><text x="53.5105%" y="191.50">ThreadId(6)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,525,954,328 samples, 0.72%)</title><rect x="66.8672%" y="133" width="0.7219%" height="15" fill="rgb(220,109,13)" fg:x="233960761281" fg:w="2525954328"/><text x="67.1172%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,669,326,451 samples, 0.48%)</title><rect x="67.1121%" y="117" width="0.4771%" height="15" fill="rgb(232,18,1)" fg:x="234817389158" fg:w="1669326451"/><text x="67.3621%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (769,418,649 samples, 0.22%)</title><rect x="67.3692%" y="101" width="0.2199%" height="15" fill="rgb(215,41,42)" fg:x="235717296960" fg:w="769418649"/><text x="67.6192%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,868,927,202 samples, 1.11%)</title><rect x="66.5871%" y="149" width="1.1058%" height="15" fill="rgb(224,123,36)" fg:x="232980749116" fg:w="3868927202"/><text x="66.8371%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (362,960,709 samples, 0.10%)</title><rect x="67.5892%" y="133" width="0.1037%" height="15" fill="rgb(240,125,3)" fg:x="236486715609" fg:w="362960709"/><text x="67.8392%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (343,340,279 samples, 0.10%)</title><rect x="67.6929%" y="149" width="0.0981%" height="15" fill="rgb(205,98,50)" fg:x="236849676318" fg:w="343340279"/><text x="67.9429%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (941,927,266 samples, 0.27%)</title><rect x="68.5624%" y="133" width="0.2692%" height="15" fill="rgb(205,185,37)" fg:x="239892086065" fg:w="941927266"/><text x="68.8124%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (512,650,729 samples, 0.15%)</title><rect x="70.6829%" y="69" width="0.1465%" height="15" fill="rgb(238,207,15)" fg:x="247311515577" fg:w="512650729"/><text x="70.9329%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (12,259,108,659 samples, 3.50%)</title><rect x="69.4263%" y="117" width="3.5037%" height="15" fill="rgb(213,199,42)" fg:x="242914529694" fg:w="12259108659"/><text x="69.6763%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (11,112,507,955 samples, 3.18%)</title><rect x="69.7540%" y="101" width="3.1760%" height="15" fill="rgb(235,201,11)" fg:x="244061130398" fg:w="11112507955"/><text x="70.0040%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (10,181,771,536 samples, 2.91%)</title><rect x="70.0200%" y="85" width="2.9100%" height="15" fill="rgb(207,46,11)" fg:x="244991866817" fg:w="10181771536"/><text x="70.2700%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,349,472,047 samples, 2.10%)</title><rect x="70.8295%" y="69" width="2.1005%" height="15" fill="rgb(241,35,35)" fg:x="247824166306" fg:w="7349472047"/><text x="71.0795%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,580,887,972 samples, 1.31%)</title><rect x="71.6207%" y="53" width="1.3092%" height="15" fill="rgb(243,32,47)" fg:x="250592750381" fg:w="4580887972"/><text x="71.8707%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,469,822,213 samples, 0.42%)</title><rect x="72.5099%" y="37" width="0.4201%" height="15" fill="rgb(247,202,23)" fg:x="253703816140" fg:w="1469822213"/><text x="72.7599%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (706,176,986 samples, 0.20%)</title><rect x="74.1687%" y="85" width="0.2018%" height="15" fill="rgb(219,102,11)" fg:x="259507761403" fg:w="706176986"/><text x="74.4187%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,097,775,387 samples, 8.03%)</title><rect x="67.7910%" y="149" width="8.0305%" height="15" fill="rgb(243,110,44)" fg:x="237193016597" fg:w="28097775387"/><text x="68.0410%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,456,778,653 samples, 6.99%)</title><rect x="68.8316%" y="133" width="6.9899%" height="15" fill="rgb(222,74,54)" fg:x="240834013331" fg:w="24456778653"/><text x="69.0816%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,117,153,631 samples, 2.89%)</title><rect x="72.9300%" y="117" width="2.8915%" height="15" fill="rgb(216,99,12)" fg:x="255173638353" fg:w="10117153631"/><text x="73.1800%" y="127.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (8,864,921,295 samples, 2.53%)</title><rect x="73.2879%" y="101" width="2.5336%" height="15" fill="rgb(226,22,26)" fg:x="256425870689" fg:w="8864921295"/><text x="73.5379%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,076,853,595 samples, 1.45%)</title><rect x="74.3705%" y="85" width="1.4510%" height="15" fill="rgb(217,163,10)" fg:x="260213938389" fg:w="5076853595"/><text x="74.6205%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,669,846,768 samples, 0.48%)</title><rect x="75.3443%" y="69" width="0.4773%" height="15" fill="rgb(213,25,53)" fg:x="263620945216" fg:w="1669846768"/><text x="75.5943%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (191,280,840 samples, 0.05%)</title><rect x="76.5153%" y="117" width="0.0547%" height="15" fill="rgb(252,105,26)" fg:x="267718173046" fg:w="191280840"/><text x="76.7653%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,815,874,917 samples, 0.80%)</title><rect x="75.8215%" y="149" width="0.8048%" height="15" fill="rgb(220,39,43)" fg:x="265290791984" fg:w="2815874917"/><text x="76.0715%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,195,454,565 samples, 0.34%)</title><rect x="76.2846%" y="133" width="0.3417%" height="15" fill="rgb(229,68,48)" fg:x="266911212336" fg:w="1195454565"/><text x="76.5346%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (197,213,015 samples, 0.06%)</title><rect x="76.5699%" y="117" width="0.0564%" height="15" fill="rgb(252,8,32)" fg:x="267909453886" fg:w="197213015"/><text x="76.8199%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,286,911,689 samples, 11.23%)</title><rect x="65.3979%" y="165" width="11.2284%" height="15" fill="rgb(223,20,43)" fg:x="228819786851" fg:w="39286911689"/><text x="65.6479%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(7)-tokio-rt-worker (40,884,299,265 samples, 11.68%)</title><rect x="64.9455%" y="181" width="11.6849%" height="15" fill="rgb(229,81,49)" fg:x="227236900650" fg:w="40884299265"/><text x="65.1955%" y="191.50">ThreadId(7)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,247,381,549 samples, 0.64%)</title><rect x="78.6468%" y="133" width="0.6423%" height="15" fill="rgb(236,28,36)" fg:x="275176188865" fg:w="2247381549"/><text x="78.8968%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,385,338,032 samples, 0.40%)</title><rect x="78.8932%" y="117" width="0.3959%" height="15" fill="rgb(249,185,26)" fg:x="276038232382" fg:w="1385338032"/><text x="79.1432%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (478,863,427 samples, 0.14%)</title><rect x="79.1523%" y="101" width="0.1369%" height="15" fill="rgb(249,174,33)" fg:x="276944706987" fg:w="478863427"/><text x="79.4023%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,605,245,453 samples, 1.03%)</title><rect x="78.3605%" y="149" width="1.0304%" height="15" fill="rgb(233,201,37)" fg:x="274174407904" fg:w="3605245453"/><text x="78.6105%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (356,082,943 samples, 0.10%)</title><rect x="79.2891%" y="133" width="0.1018%" height="15" fill="rgb(221,78,26)" fg:x="277423570414" fg:w="356082943"/><text x="79.5391%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (344,145,521 samples, 0.10%)</title><rect x="79.3909%" y="149" width="0.0984%" height="15" fill="rgb(250,127,30)" fg:x="277779653357" fg:w="344145521"/><text x="79.6409%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (983,759,271 samples, 0.28%)</title><rect x="80.4329%" y="133" width="0.2812%" height="15" fill="rgb(230,49,44)" fg:x="281425438463" fg:w="983759271"/><text x="80.6829%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (498,436,140 samples, 0.14%)</title><rect x="82.5018%" y="69" width="0.1425%" height="15" fill="rgb(229,67,23)" fg:x="288664450676" fg:w="498436140"/><text x="82.7518%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,615,058,547 samples, 3.32%)</title><rect x="81.3248%" y="117" width="3.3196%" height="15" fill="rgb(249,83,47)" fg:x="284545998119" fg:w="11615058547"/><text x="81.5748%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (10,724,636,576 samples, 3.07%)</title><rect x="81.5792%" y="101" width="3.0652%" height="15" fill="rgb(215,43,3)" fg:x="285436420090" fg:w="10724636576"/><text x="81.8292%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (9,799,340,145 samples, 2.80%)</title><rect x="81.8437%" y="85" width="2.8007%" height="15" fill="rgb(238,154,13)" fg:x="286361716521" fg:w="9799340145"/><text x="82.0937%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (6,998,169,850 samples, 2.00%)</title><rect x="82.6443%" y="69" width="2.0001%" height="15" fill="rgb(219,56,2)" fg:x="289162886816" fg:w="6998169850"/><text x="82.8943%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,248,679,891 samples, 1.21%)</title><rect x="83.4301%" y="53" width="1.2143%" height="15" fill="rgb(233,0,4)" fg:x="291912376775" fg:w="4248679891"/><text x="83.6801%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,460,205,817 samples, 0.42%)</title><rect x="84.2271%" y="37" width="0.4173%" height="15" fill="rgb(235,30,7)" fg:x="294700850849" fg:w="1460205817"/><text x="84.4771%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (724,060,185 samples, 0.21%)</title><rect x="85.8662%" y="85" width="0.2069%" height="15" fill="rgb(250,79,13)" fg:x="300436128932" fg:w="724060185"/><text x="86.1162%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,012,028,267 samples, 8.01%)</title><rect x="79.4893%" y="149" width="8.0060%" height="15" fill="rgb(211,146,34)" fg:x="278123798878" fg:w="28012028267"/><text x="79.7393%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (23,726,629,411 samples, 6.78%)</title><rect x="80.7140%" y="133" width="6.7812%" height="15" fill="rgb(228,22,38)" fg:x="282409197734" fg:w="23726629411"/><text x="80.9640%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (9,974,770,479 samples, 2.85%)</title><rect x="84.6444%" y="117" width="2.8508%" height="15" fill="rgb(235,168,5)" fg:x="296161056666" fg:w="9974770479"/><text x="84.8944%" y="127.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (8,710,873,009 samples, 2.49%)</title><rect x="85.0056%" y="101" width="2.4896%" height="15" fill="rgb(221,155,16)" fg:x="297424954136" fg:w="8710873009"/><text x="85.2556%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (4,975,638,028 samples, 1.42%)</title><rect x="86.0732%" y="85" width="1.4221%" height="15" fill="rgb(215,215,53)" fg:x="301160189117" fg:w="4975638028"/><text x="86.3232%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,631,258,545 samples, 0.47%)</title><rect x="87.0290%" y="69" width="0.4662%" height="15" fill="rgb(223,4,10)" fg:x="304504568600" fg:w="1631258545"/><text x="87.2790%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (201,839,287 samples, 0.06%)</title><rect x="88.1971%" y="117" width="0.0577%" height="15" fill="rgb(234,103,6)" fg:x="308591665221" fg:w="201839287"/><text x="88.4471%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,859,099,396 samples, 0.82%)</title><rect x="87.4952%" y="149" width="0.8171%" height="15" fill="rgb(227,97,0)" fg:x="306135827145" fg:w="2859099396"/><text x="87.7452%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,219,515,847 samples, 0.35%)</title><rect x="87.9638%" y="133" width="0.3485%" height="15" fill="rgb(234,150,53)" fg:x="307775410694" fg:w="1219515847"/><text x="88.2138%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (201,422,033 samples, 0.06%)</title><rect x="88.2548%" y="117" width="0.0576%" height="15" fill="rgb(228,201,54)" fg:x="308793504508" fg:w="201422033"/><text x="88.5048%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,277,262,693 samples, 11.23%)</title><rect x="77.0869%" y="165" width="11.2256%" height="15" fill="rgb(222,22,37)" fg:x="269718353256" fg:w="39277262693"/><text x="77.3369%" y="175.50"> rudis::server::h..</text></g><g><title>ThreadId(8)-tokio-rt-worker (40,883,325,672 samples, 11.68%)</title><rect x="76.6305%" y="181" width="11.6847%" height="15" fill="rgb(237,53,32)" fg:x="268121199915" fg:w="40883325672"/><text x="76.8805%" y="191.50">ThreadId(8)-tokio..</text></g><g><title> rudis::storage::memory::get:src/storage/memory.rs:277 (2,259,049,425 samples, 0.65%)</title><rect x="90.3186%" y="133" width="0.6456%" height="15" fill="rgb(233,25,53)" fg:x="316014378402" fg:w="2259049425"/><text x="90.5686%" y="143.50"></text></g><g><title> rudis::storage::memory::get_at:src/storage/memory.rs:263 (1,400,244,426 samples, 0.40%)</title><rect x="90.5640%" y="117" width="0.4002%" height="15" fill="rgb(210,40,34)" fg:x="316873183401" fg:w="1400244426"/><text x="90.8140%" y="127.50"></text></g><g><title> rudis::storage::memory::is_older_than:src/storage/memory.rs:218 (474,688,811 samples, 0.14%)</title><rect x="90.8286%" y="101" width="0.1357%" height="15" fill="rgb(241,220,44)" fg:x="317798739016" fg:w="474688811"/><text x="91.0786%" y="111.50"></text></g><g><title> rudis::command::execute:src/command.rs:784 (3,622,655,265 samples, 1.04%)</title><rect x="90.0329%" y="149" width="1.0354%" height="15" fill="rgb(235,28,35)" fg:x="315014919732" fg:w="3622655265"/><text x="90.2829%" y="159.50"></text></g><g><title> rudis::storage::memory::set:src/storage/memory.rs:282 (364,147,170 samples, 0.10%)</title><rect x="90.9642%" y="133" width="0.1041%" height="15" fill="rgb(210,56,17)" fg:x="318273427827" fg:w="364147170"/><text x="91.2142%" y="143.50"></text></g><g><title> rudis::command::from_resp:src/command.rs:110 (332,033,810 samples, 0.09%)</title><rect x="91.0683%" y="149" width="0.0949%" height="15" fill="rgb(224,130,29)" fg:x="318637574997" fg:w="332033810"/><text x="91.3183%" y="159.50"></text></g><g><title> rudis::conn_state::touch:src/conn_state.rs:24 (962,736,633 samples, 0.28%)</title><rect x="91.9176%" y="133" width="0.2752%" height="15" fill="rgb(235,212,8)" fg:x="321609128913" fg:w="962736633"/><text x="92.1676%" y="143.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (518,112,172 samples, 0.15%)</title><rect x="94.0563%" y="69" width="0.1481%" height="15" fill="rgb(223,33,50)" fg:x="329092316167" fg:w="518112172"/><text x="94.3063%" y="79.50"></text></g><g><title> rudis::resp::parse_checked:src/resp.rs:182 (11,745,102,287 samples, 3.36%)</title><rect x="92.8555%" y="117" width="3.3568%" height="15" fill="rgb(219,149,13)" fg:x="324890853728" fg:w="11745102287"/><text x="93.1055%" y="127.50"> ru..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (10,844,488,257 samples, 3.10%)</title><rect x="93.1129%" y="101" width="3.0994%" height="15" fill="rgb(250,156,29)" fg:x="325791467758" fg:w="10844488257"/><text x="93.3629%" y="111.50"> ru..</text></g><g><title> rudis::resp::parse_checked_array:src/resp.rs:111 (9,889,231,940 samples, 2.83%)</title><rect x="93.3859%" y="85" width="2.8264%" height="15" fill="rgb(216,193,19)" fg:x="326746724075" fg:w="9889231940"/><text x="93.6359%" y="95.50"> r..</text></g><g><title> rudis::resp::parse_checked_at:src/resp.rs:164 (7,025,527,676 samples, 2.01%)</title><rect x="94.2044%" y="69" width="2.0079%" height="15" fill="rgb(216,135,14)" fg:x="329610428339" fg:w="7025527676"/><text x="94.4544%" y="79.50"> ..</text></g><g><title> rudis::resp::parse_checked_bulk_string:src/resp.rs:85 (4,239,124,438 samples, 1.21%)</title><rect x="95.0008%" y="53" width="1.2116%" height="15" fill="rgb(241,47,5)" fg:x="332396831577" fg:w="4239124438"/><text x="95.2508%" y="63.50"></text></g><g><title> rudis::resp::find_crlf:src/resp.rs:47 (1,438,184,908 samples, 0.41%)</title><rect x="95.8013%" y="37" width="0.4110%" height="15" fill="rgb(233,42,35)" fg:x="335197771107" fg:w="1438184908"/><text x="96.0513%" y="47.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (744,113,585 samples, 0.21%)</title><rect x="97.5241%" y="85" width="0.2127%" height="15" fill="rgb(231,13,6)" fg:x="341225710239" fg:w="744113585"/><text x="97.7741%" y="95.50"></text></g><g><title> rudis::connection::read_frame:src/connection.rs:91 (28,081,060,087 samples, 8.03%)</title><rect x="91.1632%" y="149" width="8.0257%" height="15" fill="rgb(207,181,40)" fg:x="318969608807" fg:w="28081060087"/><text x="91.4132%" y="159.50"> rudis::con..</text></g><g><title> rudis::connection::parse_buffer:src/connection.rs:69 (24,478,803,348 samples, 7.00%)</title><rect x="92.1927%" y="133" width="6.9962%" height="15" fill="rgb(254,173,49)" fg:x="322571865546" fg:w="24478803348"/><text x="92.4427%" y="143.50"> rudis::c..</text></g><g><title> rudis::resp::rough_check:src/resp.rs:264 (10,414,712,879 samples, 2.98%)</title><rect x="96.2123%" y="117" width="2.9766%" height="15" fill="rgb(221,1,38)" fg:x="336635956015" fg:w="10414712879"/><text x="96.4623%" y="127.50"> ru..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (9,184,267,679 samples, 2.62%)</title><rect x="96.5640%" y="101" width="2.6249%" height="15" fill="rgb(206,124,46)" fg:x="337866401215" fg:w="9184267679"/><text x="96.8140%" y="111.50"> r..</text></g><g><title> rudis::resp::is_complete:src/resp.rs:187 (5,080,845,070 samples, 1.45%)</title><rect x="97.7368%" y="85" width="1.4521%" height="15" fill="rgb(249,21,11)" fg:x="341969823824" fg:w="5080845070"/><text x="97.9868%" y="95.50"></text></g><g><title> rudis::resp::find_crlf_u8:src/resp.rs:54 (1,664,569,232 samples, 0.48%)</title><rect x="98.7132%" y="69" width="0.4757%" height="15" fill="rgb(222,201,40)" fg:x="345386099662" fg:w="1664569232"/><text x="98.9632%" y="79.50"></text></g><g><title> rudis::resp::serialize_bulk_string:src/resp.rs:314 (191,241,321 samples, 0.05%)</title><rect x="99.8854%" y="117" width="0.0547%" height="15" fill="rgb(235,61,29)" fg:x="349487474352" fg:w="191241321"/><text x="100.1354%" y="127.50"></text></g><g><title> rudis::connection::write_response:src/connection.rs:143 (2,826,240,054 samples, 0.81%)</title><rect x="99.1889%" y="149" width="0.8078%" height="15" fill="rgb(219,207,3)" fg:x="347050668894" fg:w="2826240054"/><text x="99.4389%" y="159.50"></text></g><g><title> rudis::resp::serialize:src/resp.rs:274 (1,200,678,262 samples, 0.34%)</title><rect x="99.6535%" y="133" width="0.3432%" height="15" fill="rgb(222,56,46)" fg:x="348676230686" fg:w="1200678262"/><text x="99.9035%" y="143.50"></text></g><g><title> rudis::resp::serialize_simple_string:src/resp.rs:285 (198,193,275 samples, 0.06%)</title><rect x="99.9400%" y="117" width="0.0566%" height="15" fill="rgb(239,76,54)" fg:x="349678715673" fg:w="198193275"/><text x="100.1900%" y="127.50"></text></g><g><title> rudis::server::handle_connection:src/server.rs:127 (39,290,579,123 samples, 11.23%)</title><rect x="88.7672%" y="165" width="11.2295%" height="15" fill="rgb(231,124,27)" fg:x="310586384860" fg:w="39290579123"/><text x="89.0172%" y="175.50"> rudis::server::h..</text></g><g><title>all (349,888,559,524 samples, 100%)</title><rect x="0.0000%" y="197" width="100.0000%" height="15" fill="rgb(249,195,6)" fg:x="0" fg:w="349888559524"/><text x="0.2500%" y="207.50"></text></g><g><title>ThreadId(9)-tokio-rt-worker (40,884,033,937 samples, 11.68%)</title><rect x="88.3151%" y="181" width="11.6849%" height="15" fill="rgb(237,174,47)" fg:x="309004525587" fg:w="40884033937"/><text x="88.5651%" y="191.50">ThreadId(9)-tokio..</text></g></svg></svg>
