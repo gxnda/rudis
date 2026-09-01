@@ -25,6 +25,7 @@ pub enum ParseError {
 }
 
 impl RespValue {
+    #[tracing::instrument]
     pub fn as_integer(&self) -> Result<i64, ParseError> {
         match self {
             RespValue::Integer(i) => Ok(*i),
@@ -32,27 +33,32 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     pub fn is_error(&self) -> bool {
         self.is_err()
     }
 
+    #[tracing::instrument]
     pub fn is_err(&self) -> bool {
         matches!(self, RespValue::Error(_))
     }
 
     /// Returns (end, start) around the \r\n, does not include \r\n.
+    #[tracing::instrument]
     fn find_crlf(input: &Bytes, start: usize) -> Result<(usize, usize), ParseError> {
         memmem::find(&input[start..], b"\r\n")
             .map(|i| (start + i, start + i + 2))
             .ok_or(ParseError::Incomplete)
     }
 
+    #[tracing::instrument]
     fn find_crlf_u8(input: &[u8], start: usize) -> Result<(usize, usize), ParseError> {
         memmem::find(&input[start..], b"\r\n")
             .map(|i| (start + i, start + i + 2))
             .ok_or(ParseError::Incomplete)
     }
 
+    #[tracing::instrument]
     fn parse_checked_simple_string(
         input: &Bytes,
         start: usize,
@@ -63,6 +69,7 @@ impl RespValue {
             .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))
     }
 
+    #[tracing::instrument]
     fn parse_checked_integer(
         input: &Bytes,
         start: usize,
@@ -75,6 +82,7 @@ impl RespValue {
             .map(|i| (RespValue::Integer(i), next_start))
     }
 
+    #[tracing::instrument]
     fn parse_checked_bulk_string(
         input: &Bytes,
         start: usize,
@@ -100,6 +108,7 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     fn parse_checked_array(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
         let (end, mut next_start) = Self::find_crlf(input, start)?;
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
@@ -125,6 +134,7 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     fn parse_checked_error(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
         String::from_utf8(input[start..end].into())
@@ -132,6 +142,7 @@ impl RespValue {
             .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))
     }
 
+    #[tracing::instrument]
     fn parse_checked_inline(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
         let s: Bytes = input.slice(start..end);
@@ -150,6 +161,7 @@ impl RespValue {
         ))
     }
 
+    #[tracing::instrument]
     fn parse_checked_at(input: &Bytes, start: usize) -> Result<(RespValue, usize), ParseError> {
         if start >= input.len() {
             // Shouldn't be possible but AOF test fails without this and I cba to refactor AOF
@@ -167,10 +179,12 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     pub fn parse_checked(input: &Bytes) -> Result<(RespValue, usize), ParseError> {
         Self::parse_checked_at(input, 0)
     }
 
+    #[tracing::instrument]
     fn is_complete(input: &[u8], start: usize) -> Result<usize, ParseError> {
         if start >= input.len() {
             return Err(ParseError::Incomplete);
@@ -247,6 +261,7 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     /// ensures the request is complete
     pub fn rough_check(input: &[u8]) -> Result<usize, ParseError> {
         if input.is_empty() {
@@ -256,6 +271,7 @@ impl RespValue {
         RespValue::is_complete(input, 0)
     }
 
+    #[tracing::instrument]
     pub fn serialize(self) -> Vec<u8> {
         match self {
             RespValue::SimpleString(s) => Self::serialize_simple_string(s),
@@ -266,6 +282,7 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     fn serialize_simple_string(s: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + s.len());
         bytes.push(b'+');
@@ -274,6 +291,7 @@ impl RespValue {
         bytes
     }
 
+    #[tracing::instrument]
     fn serialize_error(e: String) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(3 + e.len());
         bytes.push(b'-');
@@ -282,6 +300,7 @@ impl RespValue {
         bytes
     }
 
+    #[tracing::instrument]
     fn serialize_integer(i: i64) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.push(b':');
@@ -292,6 +311,7 @@ impl RespValue {
         bytes
     }
 
+    #[tracing::instrument]
     fn serialize_bulk_string(s: Option<Bytes>) -> Vec<u8> {
         match s {
             Some(s) => {
@@ -307,6 +327,7 @@ impl RespValue {
         }
     }
 
+    #[tracing::instrument]
     fn serialize_array(opt: Option<Vec<RespValue>>) -> Vec<u8> {
         match opt {
             Some(elements) => {

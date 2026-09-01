@@ -107,6 +107,7 @@ pub enum ParseError {
 }
 
 impl Command {
+    #[tracing::instrument]
     pub fn from_resp(resp: RespValue) -> Result<Self, ParseError> {
         // Takes in a RespValue array of bulk strings, since that is what is given in the request
         // e.g. [b"SET", 234, b"bar"]
@@ -569,6 +570,7 @@ impl Command {
         }
     }
 
+    #[tracing::instrument]
     pub fn to_resp(&self) -> RespValue {
         match self {
             Command::Invalid { message } => {
@@ -779,6 +781,7 @@ impl Command {
         }
     }
 
+    #[tracing::instrument]
     pub fn execute(&self, storage: &StorageEngine) -> RespValue {
         match self {
             Command::Invalid { message: _ } => RespValue::Error("Invalid message: ".to_string()),

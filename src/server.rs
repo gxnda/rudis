@@ -153,6 +153,7 @@ pub struct TimeoutHandler {
 }
 
 impl TimeoutHandler {
+    #[tracing::instrument]
     pub fn new(timeout_ms: u64) -> Self {
         TimeoutHandler {
             conns: DashMap::new(),
@@ -160,12 +161,14 @@ impl TimeoutHandler {
         }
     }
 
+    #[tracing::instrument]
     pub fn add(&self, conn: Arc<ConnState>) -> u64 {
         let id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
         self.conns.insert(id, Arc::downgrade(&conn));
         id
     }
 
+    #[tracing::instrument]
     pub fn remove(&self, id: u64) -> bool {
         self.conns.remove(&id).is_some()
     }

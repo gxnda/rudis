@@ -9,7 +9,7 @@ use serde::de::{self, Error, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -189,6 +189,7 @@ impl<'de> Deserialize<'de> for RedisValue {
 }
 
 impl RedisValue {
+    #[tracing::instrument]
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             RedisValue::Integer(i) => Some(*i),
@@ -199,6 +200,7 @@ impl RedisValue {
 }
 
 impl Clone for DataEntry {
+    #[tracing::instrument]
     fn clone(&self) -> Self {
         DataEntry {
             value: self.value.clone(),
@@ -208,10 +210,12 @@ impl Clone for DataEntry {
 }
 
 impl DataEntry {
+    #[tracing::instrument]
     pub fn is_expired(&self) -> bool {
         self.is_older_than_now()
     }
 
+    #[tracing::instrument]
     fn is_older_than(&self, instant: u64) -> bool {
         if let Some(exp) = self.expiry {
             exp < instant
@@ -220,6 +224,7 @@ impl DataEntry {
         }
     }
 
+    #[tracing::instrument]
     #[inline]
     fn is_older_than_now(&self) -> bool {
         self.is_older_than(Clock::recent_since_epoch().as_millis())
@@ -232,6 +237,7 @@ pub enum IncrError {
 }
 
 impl StorageEngine {
+    #[tracing::instrument]
     pub fn with_capacity_and_shards(capacity: usize, shard_count: usize) -> Self {
         StorageEngine {
             data: Arc::new(DashMap::with_capacity_and_hasher_and_shard_amount(
@@ -243,6 +249,7 @@ impl StorageEngine {
         }
     }
 
+    #[tracing::instrument]
     pub fn with_capacity(capacity: usize) -> Self {
         StorageEngine {
             data: Arc::new(DashMap::with_capacity_and_hasher(
@@ -253,6 +260,7 @@ impl StorageEngine {
         }
     }
 
+    #[tracing::instrument]
     #[inline]
     pub fn get_at(&self, key: &Bytes, now: u64) -> Option<RedisValue> {
         if let Some(entry) = self.data.get(key) {
@@ -266,10 +274,12 @@ impl StorageEngine {
         None
     }
 
+    #[tracing::instrument]
     pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
         self.get_at(key, Clock::recent_since_epoch().as_millis())
     }
 
+    #[tracing::instrument]
     pub fn set(&self, key: Bytes, value: RedisValue, expiry_instant: Option<u64>) {
         self.data.insert(
             key,
@@ -280,17 +290,20 @@ impl StorageEngine {
         );
     }
 
+    #[tracing::instrument]
     #[inline]
     pub fn del(&self, key: &Bytes) -> bool {
         self.data.remove(key).is_some()
     }
 
+    #[tracing::instrument]
     pub fn set_expire(&self, key: &Bytes, expiry_instant: Option<u64>) {
         if let Some(mut entry) = self.data.get_mut(key) {
             entry.expiry = expiry_instant;
         }
     }
 
+    #[tracing::instrument]
     pub fn get_expire(&self, key: &Bytes) -> Result<Option<u64>, &'static str> {
         match self.data.get(key) {
             Some(entry) => Ok(entry.expiry), // return key, None if no expiry
@@ -298,6 +311,7 @@ impl StorageEngine {
         }
     }
 
+    #[tracing::instrument]
     #[inline]
     pub fn set_expire_in(&self, key: &Bytes, duration_ms: u64) {
         self.set_expire(
@@ -306,16 +320,19 @@ impl StorageEngine {
         );
     }
 
+    #[tracing::instrument]
     #[inline]
     pub fn exists(&self, key: &Bytes) -> bool {
         self.data.contains_key(key)
     }
 
+    #[tracing::instrument]
     #[inline]
     pub fn incr(&self, key: &Bytes) -> Result<i64, IncrError> {
         self.incr_by(key, 1)
     }
 
+    #[tracing::instrument]
     pub fn incr_by(&self, key: &Bytes, incr: i64) -> Result<i64, IncrError> {
         match self.data.entry(key.clone()) {
             Entry::Occupied(e) => {
@@ -349,6 +366,7 @@ impl StorageEngine {
         }
     }
 
+    #[tracing::instrument]
     pub fn decr(&self, key: &Bytes) -> Result<i64, IncrError> {
         self.incr_by(key, -1)
     }
@@ -357,10 +375,12 @@ impl StorageEngine {
         self.data.alter(key, f)
     }
 
+    #[tracing::instrument]
     pub fn clear(&self) {
         self.data.clear()
     }
 
+    #[tracing::instrument]
     pub fn get_matching_values(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // Returns all keys with matching values
         let re = Regex::new(pattern)?;
@@ -384,6 +404,7 @@ impl StorageEngine {
         Ok(matches)
     }
 
+    #[tracing::instrument]
     fn glob_to_regex(glob: &str) -> String {
         let mut regex = String::with_capacity(glob.len() * 2);
         regex.push('^'); // Match from the start
@@ -404,6 +425,7 @@ impl StorageEngine {
         regex
     }
 
+    #[tracing::instrument]
     pub fn get_matching_keys(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // Returns all keys which match pattern
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
@@ -418,6 +440,7 @@ impl StorageEngine {
             .collect())
     }
 
+    #[tracing::instrument]
     pub fn get_matching_keys_par(&self, pattern: &str) -> Result<Vec<Bytes>, regex::Error> {
         // parallel version of the above function using rayon
         let re = Regex::new(&StorageEngine::glob_to_regex(pattern))?;
@@ -435,19 +458,23 @@ impl StorageEngine {
             .collect())
     }
 
+    #[tracing::instrument]
     pub fn remove_expired(&self) {
         self.remove_older_than(Clock::recent_since_epoch().as_millis())
     }
 
+    #[tracing::instrument]
     pub fn remove_older_than(&self, inst: u64) {
         self.data.retain(|_, entry| !entry.is_older_than(inst));
     }
 
+    #[tracing::instrument]
     fn remove_expired_on(data: &DashMap<Bytes, DataEntry, RandomState>) {
         let now = Clock::recent_since_epoch().as_millis();
         data.retain(|_, entry| !entry.is_older_than(now));
     }
 
+    #[tracing::instrument]
     pub fn remove_expired_par(&self) {
         // possibly faster for large dashmaps
         let now = Clock::recent_since_epoch().as_millis();
@@ -463,6 +490,7 @@ impl StorageEngine {
         }
     }
 
+    #[tracing::instrument]
     pub fn run_expiration_loop(&self) {
         let child_token = self.cancel_token.child_token();
         let data = Arc::clone(&self.data);
@@ -481,6 +509,7 @@ impl StorageEngine {
         });
     }
 
+    #[tracing::instrument]
     pub fn stop_expiration_loop(&self) {
         self.cancel_token.cancel();
     }

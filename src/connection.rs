@@ -49,6 +49,7 @@ impl<S> Connection<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
+    #[tracing::instrument]
     pub fn new(stream: S, aof: Option<Arc<AOF>>) -> Self {
         let notify = Arc::new(Notify::new());
         Connection {
@@ -60,6 +61,7 @@ where
         }
     }
 
+    #[tracing::instrument]
     pub fn get_state(&self) -> Arc<ConnState> {
         self.state.clone()
     }
