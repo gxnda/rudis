@@ -6,6 +6,7 @@ use std::sync::{
 use coarsetime::Instant;
 use tokio::sync::Notify;
 
+#[derive(Debug)]
 pub struct ConnState {
     last_activity: AtomicU64,
     shutdown_notify: Arc<Notify>,

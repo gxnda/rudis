@@ -2,6 +2,7 @@ use crate::conn_state::ConnState;
 use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
 use bytes::BytesMut;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::{io, time::SystemTimeError};
 use thiserror::Error;
@@ -35,6 +36,7 @@ pub enum ConnectionError {
     AofError(String),
 }
 
+#[derive(Debug)]
 pub struct Connection<S> {
     stream: S,
     buffer: BytesMut,
@@ -45,7 +47,7 @@ pub struct Connection<S> {
 
 impl<S> Connection<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     pub fn new(stream: S, aof: Option<Arc<AOF>>) -> Self {
         let notify = Arc::new(Notify::new());
@@ -62,6 +64,7 @@ where
         self.state.clone()
     }
 
+    #[tracing::instrument]
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         match RespValue::rough_check(&self.buffer) {
             Ok(end_index) => {
@@ -83,6 +86,7 @@ where
         }
     }
 
+    #[tracing::instrument]
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
 
@@ -134,6 +138,7 @@ where
         }
     }
 
+    #[tracing::instrument]
     pub async fn write_response(&mut self, response: RespValue) -> Result<(), ConnectionError> {
         let serialized = response.serialize();
         self.stream

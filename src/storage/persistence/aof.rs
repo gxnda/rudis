@@ -13,6 +13,7 @@ use crate::{
     Config,
 };
 
+#[derive(Debug)]
 pub struct AOF {
     config: Arc<Config>,
     reader: Option<BufReader<File>>,
@@ -21,6 +22,7 @@ pub struct AOF {
 }
 
 impl AOF {
+    #[tracing::instrument]
     pub async fn new(config: Arc<Config>) -> Result<Self, PersistenceError> {
         let file = OpenOptions::new()
             .create(true)
@@ -35,6 +37,7 @@ impl AOF {
         })
     }
 
+    #[tracing::instrument]
     pub fn ensure_reader(&mut self) -> Result<(), PersistenceError> {
         if self.reader.is_none() {
             let file = File::open(&self.config.aof_path)?;
@@ -43,21 +46,25 @@ impl AOF {
         Ok(())
     }
 
+    #[tracing::instrument]
     pub fn reset_reader_and_buffer(&mut self) -> Result<(), PersistenceError> {
         self.reader = None;
         self.buffer.clear();
         self.ensure_reader()
     }
 
+    #[tracing::instrument]
     pub async fn append_str(&self, resp_str: &str) -> Result<(), PersistenceError> {
         // resp_str is not checked if it is valid.
         self.append_bytes(resp_str.as_bytes()).await
     }
 
+    #[tracing::instrument]
     pub async fn append_command(&self, resp_command: RespValue) -> Result<(), PersistenceError> {
         self.append_bytes(&resp_command.serialize()).await
     }
 
+    #[tracing::instrument]
     pub async fn append_bytes(&self, bytes: &[u8]) -> Result<(), PersistenceError> {
         // resp_str is not checked if it is valid.
         let mut file_guard = self.write_mutex.lock().await;

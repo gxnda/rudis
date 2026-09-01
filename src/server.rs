@@ -18,6 +18,9 @@ use crate::{
 };
 use coarsetime::Updater;
 
+use tracing_flame::FlameLayer;
+use tracing_subscriber::prelude::*;
+
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error("Disconnected")]
@@ -40,6 +43,7 @@ impl From<ParseError> for ServerError {
     }
 }
 
+#[derive(Debug)]
 pub struct Server {
     listener: TcpListener,
     storage: Arc<StorageEngine>,
@@ -50,6 +54,7 @@ pub struct Server {
 }
 
 impl Server {
+    #[tracing::instrument]
     pub async fn new(
         config: Arc<Config>,
         storage: Arc<StorageEngine>,
@@ -72,7 +77,13 @@ impl Server {
         ))
     }
 
+    #[tracing::instrument]
     pub async fn run(&mut self) {
+        // TODO: Remove
+        let (flame_layer, _guard) = FlameLayer::with_file("tracing.folded").unwrap();
+        tracing_subscriber::registry().with(flame_layer).init();
+        // ---
+
         let timeout_handler = self.timeout_handler.clone();
         let shutdown_rx_watcher = self.shutdown_rx.clone();
         tokio::spawn(async move {
@@ -113,6 +124,7 @@ impl Server {
         }
     }
 
+    #[tracing::instrument]
     async fn handle_connection(
         mut conn: Connection<TcpStream>,
         storage: Arc<StorageEngine>,
@@ -133,6 +145,8 @@ impl Server {
 }
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug)]
 pub struct TimeoutHandler {
     conns: DashMap<u64, Weak<ConnState>>,
     timeout_ms: u64,
@@ -156,6 +170,7 @@ impl TimeoutHandler {
         self.conns.remove(&id).is_some()
     }
 
+    #[tracing::instrument]
     pub async fn check_all(&self) {
         self.conns
             .retain(|_, weak_state| match weak_state.upgrade() {
@@ -170,6 +185,7 @@ impl TimeoutHandler {
             });
     }
 
+    #[tracing::instrument]
     pub async fn watch(&self, mut watcher: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(Duration::from_millis(1000)); // check every second
         loop {

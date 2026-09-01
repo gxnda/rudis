@@ -4,6 +4,7 @@ use clap::Parser;
 use rudis::{memory::StorageEngine, Config, Server};
 
 #[tokio::main]
+#[tracing::instrument]
 async fn main() -> Result<(), Box<dyn Error>> {
     let config: Config = Config::parse();
     dbg!(&config);

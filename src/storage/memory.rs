@@ -13,7 +13,7 @@ use std::fmt;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StorageEngine {
     #[serde(
         serialize_with = "serialize_dashmap",
@@ -24,13 +24,13 @@ pub struct StorageEngine {
     cancel_token: CancellationToken,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DataEntry {
     pub value: RedisValue,
     pub expiry: Option<u64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RedisValue {
     Integer(i64),
     String(Bytes),
