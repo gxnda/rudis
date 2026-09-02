@@ -14,8 +14,11 @@ pub enum RespValue {
 
 #[derive(Debug, Error)]
 pub enum ParseError {
+    // Incomplete looks a bit funny, basically it only has stuff in it if an array is incomplete so
+    // it can be continued, ((array, incomplete_child_element), should also have support for
+    // incomplete nested arrays (that's why it recurses)
     #[error("Incomplete parse")]
-    Incomplete,
+    Incomplete(Option<(Vec<RespValue>, Option<Box<ParseError>>)>), // So then Array can persist from incomplete
     #[error("Not an integer: {0}")]
     NotAnInteger(String),
     #[error("Error parsing bytes: {0}")]
@@ -32,6 +35,7 @@ impl RespValue {
         }
     }
 
+    // TODO: Remove???
     pub fn is_error(&self) -> bool {
         self.is_err()
     }
@@ -44,7 +48,7 @@ impl RespValue {
     fn find_crlf(input: &BytesMut, start: usize) -> Result<(usize, usize), ParseError> {
         memmem::find(&input[start..], b"\r\n")
             .map(|i| (start + i, start + i + 2))
-            .ok_or(ParseError::Incomplete)
+            .ok_or(ParseError::Incomplete(None))
     }
 
     fn parse_simple_string(
@@ -89,7 +93,7 @@ impl RespValue {
                 let data_end = next_start + len;
                 let crlf_end = data_end + 2;
                 if input.len() < crlf_end || &input[data_end..crlf_end] != b"\r\n" {
-                    Err(ParseError::Incomplete)
+                    Err(ParseError::Incomplete(None))
                 } else {
                     // is valid, consume buffer
                     input.advance(next_start);
@@ -100,12 +104,43 @@ impl RespValue {
         }
     }
 
+    fn parse_array_from_existing(
+        input: &mut BytesMut,
+        start: usize,
+        mut items: Vec<RespValue>,
+    ) -> Result<(RespValue, usize), ParseError> {
+        let mut next_start = start;
+        dbg!("parse from existing thinks it has length", items.capacity());
+        for _ in 0..items.capacity() {
+            dbg!(&items, &input);
+            match Self::parse_at(input, next_start) {
+                Ok((item, remaining_start_index)) => {
+                    items.push(item);
+                    next_start = remaining_start_index;
+                }
+                Err(ParseError::Incomplete(Some(inner_items))) => {
+                    // contains all valid items up to the incomplete one
+                    return Err(ParseError::Incomplete(Some((
+                        items,
+                        Some(Box::new(ParseError::Incomplete(Some(inner_items)))),
+                    ))));
+                }
+                Err(ParseError::Incomplete(None)) => {
+                    return Err(ParseError::Incomplete(Some((items, None))));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok((RespValue::Array(Some(items)), next_start))
+    }
+
     fn parse_array(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
-        let (end, mut next_start) = Self::find_crlf(input, start)?;
+        dbg!("Parsing array", &input, &start);
+        let (end, next_start) = Self::find_crlf(input, start)?;
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
             ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
         })?;
-
+        dbg!(len, end, next_start);
         match len {
             // null
             -1 => Ok((RespValue::Array(None), next_start)),
@@ -113,13 +148,8 @@ impl RespValue {
             0 => Ok((RespValue::Array(Some(vec![])), next_start)),
             // Standard array
             len if len > 0 => {
-                let mut items = Vec::with_capacity(len as usize);
-                for _ in 0..len {
-                    let (item, remaining_start_index) = Self::parse_at(input, next_start)?;
-                    items.push(item);
-                    next_start = remaining_start_index;
-                }
-                Ok((RespValue::Array(Some(items)), next_start))
+                let items = Vec::with_capacity(len as usize);
+                return RespValue::parse_array_from_existing(input, start, items);
             }
             len => Err(ParseError::LengthError(len)),
         }
@@ -160,7 +190,8 @@ impl RespValue {
 
     fn parse_at(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
         if start >= input.len() {
-            return Err(ParseError::Incomplete);
+            // no current items in the array, no child items that may be incomplete
+            return Err(ParseError::Incomplete(None));
         }
 
         match input[start] {
@@ -179,6 +210,37 @@ impl RespValue {
         Self::parse_at(input, 0)
     }
 
+    /// Attempts to parse, continuing on from the last that was incomplete
+    pub fn parse_from_incomplete(
+        input: &mut BytesMut,
+        incomplete: ParseError,
+    ) -> Result<(RespValue, usize), ParseError> {
+        match incomplete {
+            ParseError::Incomplete(Some((mut items, Some(rest)))) => {
+                // rest is always a valid addition to items, since it would be in the
+                // parse_array 1..len loop
+                match RespValue::parse_from_incomplete(input, *rest) {
+                    Ok((item, _)) => items.push(item),
+                    // Tried to parse nested section, but we still don't have enough to complete it
+                    Err(ParseError::Incomplete(inner)) => {
+                        return Err(ParseError::Incomplete(Some((
+                            items,
+                            Some(Box::new(ParseError::Incomplete(inner))),
+                        ))))
+                    }
+                    Err(e) => return Err(e),
+                }
+
+                return RespValue::parse_array_from_existing(input, 0, items);
+            }
+            ParseError::Incomplete(Some((items, None))) => {
+                return RespValue::parse_array_from_existing(input, 0, items);
+            }
+            _ => panic!("Only ParseError::Incomplete should be passed into parse_from_incomplete"),
+        }
+    }
+
+    /// Don't use!! only for testing
     pub fn parse_bytes(bytes: &Bytes) -> Result<(RespValue, usize), ParseError> {
         RespValue::parse(&mut BytesMut::from(bytes.as_ref()))
     }
@@ -319,6 +381,9 @@ mod tests {
 
     #[test]
     fn test_array() {
+        //  assertion `left == right` failed
+        //  left: Array(Some([Array(Some([BulkString(Some(b"2"))])), Array(Some([BulkString(Some(b""))]))]))
+        //  right: Array(Some([BulkString(Some(b"foo")), BulkString(Some(b"bar"))]))
         let input = &Bytes::from_static(b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n");
         let (result, _) = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
@@ -382,7 +447,6 @@ mod tests {
     fn test_incomplete_simple_string() {
         let input = &Bytes::from_static(b"+OK");
         let result = RespValue::parse_bytes(input);
-        println!("{:?}", result);
         assert!(result.is_err());
     }
 

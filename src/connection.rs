@@ -1,5 +1,5 @@
 use crate::conn_state::ConnState;
-use crate::resp::RespValue;
+use crate::resp::{ParseError, RespValue};
 use crate::storage::persistence::aof::AOF;
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -62,29 +62,50 @@ where
         self.state.clone()
     }
 
-    async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        match RespValue::parse(&mut self.buffer) {
+    async fn parse_buffer(
+        &mut self,
+        last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
+    ) -> Result<
+        (
+            Option<RespValue>,
+            Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
+        ),
+        ConnectionError,
+    > {
+        // the above may be the ugliest code I've ever written
+        let parser = if last_incomplete_data.is_some() {
+            RespValue::parse_from_incomplete(
+                &mut self.buffer,
+                ParseError::Incomplete(last_incomplete_data),
+            )
+        } else {
+            RespValue::parse(&mut self.buffer)
+        };
+        match parser {
             Ok((resp, _)) => {
                 if let Some(aof) = &self.aof {
                     aof.append_bytes(&resp.clone().serialize())
                         .await
                         .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
-                Ok(Some(resp))
+                Ok((Some(resp), None))
             }
+            Err(ParseError::Incomplete(icpt_opt)) => Ok((None, icpt_opt)),
             Err(e) => Err(ConnectionError::RespParse(e.to_string())),
         }
     }
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
-
+        let mut last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)> = None;
         if !self.buffer.is_empty() {
-            if let Some(frame) = self.parse_buffer().await? {
+            let (m_frame, m_icpt) = self.parse_buffer(last_incomplete_data).await?;
+            last_incomplete_data = m_icpt;
+
+            if let Some(frame) = m_frame {
                 return Ok(Some(frame));
             }
         }
-
         loop {
             tokio::select! {
                 read_result = self.stream.read_buf(&mut self.buffer) => {
@@ -99,7 +120,10 @@ where
                         }
                         Ok(_n) => {
                             self.state.touch();
-                            if let Some(frame) = self.parse_buffer().await? {
+                            let (m_frame, m_icpt) = self.parse_buffer(last_incomplete_data).await?;
+                            last_incomplete_data = m_icpt;
+
+                            if let Some(frame) = m_frame {
                                 return Ok(Some(frame));
                             }
                             // else continue looping, still not complete and we're still getting data

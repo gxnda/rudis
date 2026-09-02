@@ -77,6 +77,7 @@ impl AOF {
     }
 
     fn parse_buffer(&mut self) -> Result<Option<RespValue>, PersistenceError> {
+        // TODO: Add handling for incomplete, similar to connection.rs
         self.ensure_reader()?;
         let reader = self.reader.as_mut().unwrap();
         loop {
@@ -86,7 +87,7 @@ impl AOF {
                     self.buffer.advance(consumed);
                     return Ok(Some(resp));
                 }
-                Err(ParseError::Incomplete) => {
+                Err(ParseError::Incomplete(_inner)) => {
                     // try get more of the file
                     let mut chunk = [0; 1024];
                     match reader.read(&mut chunk) {
