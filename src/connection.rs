@@ -1,5 +1,5 @@
 use crate::conn_state::ConnState;
-use crate::resp::{ParseError, RespValue};
+use crate::resp::RespValue;
 use crate::storage::persistence::aof::AOF;
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -63,22 +63,15 @@ where
     }
 
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        match RespValue::rough_check(&self.buffer) {
-            Ok(end_index) => {
-                let frozen_buffer = self.buffer.split_to(end_index).freeze();
-                match RespValue::parse_checked(&frozen_buffer) {
-                    Ok((resp, consumed_len)) => {
-                        if let Some(aof) = &self.aof {
-                            aof.append_bytes(&frozen_buffer.slice(..consumed_len))
-                                .await
-                                .map_err(|e| ConnectionError::AofError(e.to_string()))?;
-                        }
-                        Ok(Some(resp))
-                    }
-                    Err(e) => Err(ConnectionError::RespParse(e.to_string())),
+        match RespValue::parse(&mut self.buffer) {
+            Ok((resp, _)) => {
+                if let Some(aof) = &self.aof {
+                    aof.append_bytes(&resp.clone().serialize())
+                        .await
+                        .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
+                Ok(Some(resp))
             }
-            Err(ParseError::Incomplete) => Ok(None),
             Err(e) => Err(ConnectionError::RespParse(e.to_string())),
         }
     }

@@ -9,7 +9,7 @@ fn bench_parse_simple_string(c: &mut Criterion) {
     group.bench_function("short_string", |b| {
         b.iter(|| {
             let input = black_box(Bytes::from_static(b"+OK\r\n"));
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
@@ -19,7 +19,7 @@ fn bench_parse_simple_string(c: &mut Criterion) {
             b"+This is a medium length string for testing purposes\r\n",
         ));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
@@ -33,7 +33,7 @@ fn bench_parse_bulk_string(c: &mut Criterion) {
     group.bench_function("small_bulk_string", |b| {
         let input = black_box(Bytes::from_static(b"$5\r\nHello\r\n"));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
@@ -47,7 +47,7 @@ fn bench_parse_bulk_string(c: &mut Criterion) {
         let full_input_bytes = Bytes::from_iter(full_input);
 
         b.iter(|| {
-            let _ = RespValue::parse_checked(black_box(&full_input_bytes));
+            let _ = RespValue::parse_bytes(black_box(&full_input_bytes));
         });
     });
 
@@ -61,7 +61,7 @@ fn bench_parse_bulk_string(c: &mut Criterion) {
         let full_input_bytes = Bytes::from_iter(full_input);
 
         b.iter(|| {
-            let _ = RespValue::parse_checked(black_box(&full_input_bytes));
+            let _ = RespValue::parse_bytes(black_box(&full_input_bytes));
         });
     });
 
@@ -74,14 +74,14 @@ fn bench_parse_integer(c: &mut Criterion) {
     group.bench_function("small_integer", |b| {
         let input = black_box(Bytes::from_static(b":42\r\n"));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
     group.bench_function("large_integer", |b| {
         let input = black_box(Bytes::from_static(b":9223372036854775807\r\n"));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
@@ -96,14 +96,14 @@ fn bench_parse_array(c: &mut Criterion) {
             b"*3\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$3\r\nbaz\r\n",
         ));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
     group.bench_function("medium_array_10_elements", |b| {
         let input = black_box(Bytes::from_static(b"*10\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n$4\r\nitem\r\n"));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
@@ -116,7 +116,7 @@ fn bench_parse_error(c: &mut Criterion) {
     group.bench_function("simple_error", |b| {
         let input = black_box(Bytes::from_static(b"-ERR unknown command\r\n"));
         b.iter(|| {
-            let _ = RespValue::parse_checked(&input);
+            let _ = RespValue::parse_bytes(&input);
         });
     });
 
