@@ -84,7 +84,7 @@ where
             RespValue::parse(&mut self.buffer)
         };
         match parser {
-            Ok((resp, _)) => {
+            Ok(resp) => {
                 if let Some(aof) = &self.aof {
                     aof.append_bytes(&resp.clone().serialize())
                         .await

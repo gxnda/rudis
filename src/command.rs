@@ -1420,7 +1420,7 @@ mod tests {
         let cmd = Command::from_resp(lpush_cmd).unwrap();
         let response = cmd.execute(&storage);
         println!("{:?}", response);
-        assert!(response.is_error());
+        assert!(response.is_err());
     }
 
     #[test]

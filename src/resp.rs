@@ -35,11 +35,6 @@ impl RespValue {
         }
     }
 
-    // TODO: Remove???
-    pub fn is_error(&self) -> bool {
-        self.is_err()
-    }
-
     pub fn is_err(&self) -> bool {
         matches!(self, RespValue::Error(_))
     }
@@ -51,35 +46,28 @@ impl RespValue {
             .ok_or(ParseError::Incomplete(None))
     }
 
-    fn parse_simple_string(
-        input: &mut BytesMut,
-        start: usize,
-    ) -> Result<(RespValue, usize), ParseError> {
+    fn parse_simple_string(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
         let (end, _) = Self::find_crlf(input, start)?;
         // we now know it's valid or malformed, consume the buffer
         input.advance(start);
-        String::from_utf8(input.split_to(end - start).into()) // splits to consume
-            .map(|s| (RespValue::SimpleString(s), 2))
-            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))
+        let value = String::from_utf8(input.split_to(end - start).into())
+            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))?;
+        input.advance(2);
+        Ok(RespValue::SimpleString(value))
     }
 
-    fn parse_integer(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
-        let (end, _) = Self::find_crlf(input, start)?;
+    fn parse_integer(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
+        let (end, next_start) = Self::find_crlf(input, start)?;
         // we now know it's valid or malformed, consume the buffer
         // we don't consume here so then the error message still works
-        let res = atoi::<i64>(&input[start..end])
-            .ok_or_else(|| {
-                ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
-            })
-            .map(|i| (RespValue::Integer(i), 2));
-        input.advance(end); // consume here instead
-        res
+        let int = atoi::<i64>(&input[start..end]).ok_or_else(|| {
+            ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
+        })?;
+        input.advance(next_start); // consume here instead
+        Ok(RespValue::Integer(int))
     }
 
-    fn parse_bulk_string(
-        input: &mut BytesMut,
-        start: usize,
-    ) -> Result<(RespValue, usize), ParseError> {
+    fn parse_bulk_string(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
             ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
@@ -87,7 +75,10 @@ impl RespValue {
 
         match len {
             // null bulk string
-            -1 => Ok((RespValue::BulkString(None), next_start)),
+            -1 => {
+                input.advance(next_start);
+                Ok(RespValue::BulkString(None))
+            }
             len if len >= 0 => {
                 let len = len as usize;
                 let data_end = next_start + len;
@@ -97,7 +88,9 @@ impl RespValue {
                 } else {
                     // is valid, consume buffer
                     input.advance(next_start);
-                    Ok((RespValue::BulkString(Some(input.split_to(len).freeze())), 2))
+                    let res = input.split_to(len).freeze();
+                    input.advance(2);
+                    Ok(RespValue::BulkString(Some(res)))
                 }
             }
             _ => Err(ParseError::LengthError(len)),
@@ -108,13 +101,12 @@ impl RespValue {
         input: &mut BytesMut,
         start: usize,
         mut items: Vec<RespValue>,
-    ) -> Result<(RespValue, usize), ParseError> {
-        let mut next_start = start;
+    ) -> Result<RespValue, ParseError> {
+        input.advance(start);
         for _ in 0..items.capacity().saturating_sub(items.len()) {
-            match Self::parse_at(input, next_start) {
-                Ok((item, remaining_start_index)) => {
+            match Self::parse_at(input, 0) {
+                Ok(item) => {
                     items.push(item);
-                    next_start = remaining_start_index;
                 }
                 Err(ParseError::Incomplete(Some(inner_items))) => {
                     // contains all valid items up to the incomplete one
@@ -129,37 +121,39 @@ impl RespValue {
                 Err(e) => return Err(e),
             }
         }
-        Ok((RespValue::Array(Some(items)), next_start))
+        Ok(RespValue::Array(Some(items)))
     }
 
-    fn parse_array(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
+    fn parse_array(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
             ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
         })?;
         match len {
             // null
-            -1 => Ok((RespValue::Array(None), next_start)),
+            -1 => Ok(RespValue::Array(None)),
             // empty
-            0 => Ok((RespValue::Array(Some(vec![])), next_start)),
+            0 => Ok(RespValue::Array(Some(vec![]))),
             // Standard array
             len if len > 0 => {
                 let items = Vec::with_capacity(len as usize);
-                return RespValue::parse_array_from_existing(input, next_start, items);
+                let res = RespValue::parse_array_from_existing(input, next_start, items);
+                res
             }
             len => Err(ParseError::LengthError(len)),
         }
     }
 
-    fn parse_error(input: &BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
+    fn parse_error(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
         let (end, next_start) = Self::find_crlf(input, start)?;
-        String::from_utf8(input[start..end].into())
-            .map(|s| (RespValue::Error(s), next_start))
-            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))
+        let str = String::from_utf8(input[start..end].into())
+            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))?;
+        input.advance(next_start);
+        Ok(RespValue::Error(str))
     }
 
-    fn parse_inline(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
-        let (end, next_start) = Self::find_crlf(input, start)?;
+    fn parse_inline(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
+        let (end, _) = Self::find_crlf(input, start)?;
         let s = &input[start..end];
         if s.contains(&b' ') {
             return Err(ParseError::ByteError(
@@ -173,18 +167,17 @@ impl RespValue {
 
         // valid, start consuming
         input.advance(start);
-        Ok((
-            RespValue::Array(
-                vec![RespValue::BulkString(Some(
-                    input.split_to(end - start).freeze(),
-                ))]
-                .into(),
-            ),
-            next_start,
-        ))
+        let res = RespValue::Array(
+            vec![RespValue::BulkString(Some(
+                input.split_to(end - start).freeze(),
+            ))]
+            .into(),
+        );
+        input.advance(2);
+        Ok(res)
     }
 
-    fn parse_at(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
+    fn parse_at(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
         if start >= input.len() {
             // no current items in the array, no child items that may be incomplete
             return Err(ParseError::Incomplete(None));
@@ -202,7 +195,7 @@ impl RespValue {
     }
 
     /// Takes in &mut Bytesmut, uses split_to to take Bytes when valid
-    pub fn parse(input: &mut BytesMut) -> Result<(RespValue, usize), ParseError> {
+    pub fn parse(input: &mut BytesMut) -> Result<RespValue, ParseError> {
         Self::parse_at(input, 0)
     }
 
@@ -210,13 +203,13 @@ impl RespValue {
     pub fn parse_from_incomplete(
         input: &mut BytesMut,
         incomplete: ParseError,
-    ) -> Result<(RespValue, usize), ParseError> {
+    ) -> Result<RespValue, ParseError> {
         match incomplete {
             ParseError::Incomplete(Some((mut items, Some(rest)))) => {
                 // rest is always a valid addition to items, since it would be in the
                 // parse_array 1..len loop
                 match RespValue::parse_from_incomplete(input, *rest) {
-                    Ok((item, _)) => items.push(item),
+                    Ok(item) => items.push(item),
                     // Tried to parse nested section, but we still don't have enough to complete it
                     Err(ParseError::Incomplete(inner)) => {
                         return Err(ParseError::Incomplete(Some((
@@ -238,7 +231,7 @@ impl RespValue {
     }
 
     /// Don't use!! only for testing
-    pub fn parse_bytes(bytes: &Bytes) -> Result<(RespValue, usize), ParseError> {
+    pub fn parse_bytes(bytes: &Bytes) -> Result<RespValue, ParseError> {
         RespValue::parse(&mut BytesMut::from(bytes.as_ref()))
     }
 
@@ -317,42 +310,42 @@ mod tests {
     #[test]
     fn test_simple_string() {
         let input = &Bytes::from_static(b"+OK\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::SimpleString("OK".to_string()));
     }
 
     #[test]
     fn test_error() {
         let input = &Bytes::from_static(b"-ERR unknown command\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Error("ERR unknown command".to_string()));
     }
 
     #[test]
     fn test_integer() {
         let input = &Bytes::from_static(b":1000\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Integer(1000));
     }
 
     #[test]
     fn test_integer_zero() {
         let input = &Bytes::from_static(b":0\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Integer(0));
     }
 
     #[test]
     fn test_integer_negative() {
         let input = &Bytes::from_static(b":-42\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Integer(-42));
     }
 
     #[test]
     fn test_bulk_string() {
         let input = &Bytes::from_static(b"$5\r\nhello\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
             result,
             RespValue::BulkString(Option::from(Bytes::from_static(b"hello")))
@@ -362,7 +355,7 @@ mod tests {
     #[test]
     fn test_bulk_string_empty() {
         let input = &Bytes::from_static(b"$0\r\n\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
             result,
             RespValue::BulkString(Option::from(Bytes::from_static(b"")))
@@ -372,17 +365,17 @@ mod tests {
     #[test]
     fn test_bulk_string_null() {
         let input = &Bytes::from_static(b"$-1\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::BulkString(None));
     }
 
     #[test]
     fn test_array() {
-        //  assertion `left == right` failed
-        //  left: Array(Some([Array(Some([BulkString(Some(b"2"))])), Array(Some([BulkString(Some(b""))]))]))
+        // assertion `left == right` failed
+        //   left: Array(Some([BulkString(Some(b"foo")), Array(Some([BulkString(Some(b"bar"))]))]))
         //  right: Array(Some([BulkString(Some(b"foo")), BulkString(Some(b"bar"))]))
         let input = &Bytes::from_static(b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
             result,
             RespValue::Array(Option::from(vec![
@@ -395,21 +388,21 @@ mod tests {
     #[test]
     fn test_array_empty() {
         let input = &Bytes::from_static(b"*0\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Array(vec![].into()));
     }
 
     #[test]
     fn test_array_null() {
         let input = &Bytes::from_static(b"*-1\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(result, RespValue::Array(None));
     }
 
     #[test]
     fn test_array_mixed_types() {
         let input = &Bytes::from_static(b"*3\r\n:1\r\n+OK\r\n$-1\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
             result,
             RespValue::Array(Option::from(vec![
@@ -423,7 +416,7 @@ mod tests {
     #[test]
     fn test_nested_array() {
         let input = &Bytes::from_static(b"*2\r\n*1\r\n:1\r\n+OK\r\n");
-        let (result, _) = RespValue::parse_bytes(input).unwrap();
+        let result = RespValue::parse_bytes(input).unwrap();
         assert_eq!(
             result,
             RespValue::Array(Option::from(vec![
@@ -487,7 +480,7 @@ mod tests {
         let input = &Bytes::from_static(b"PING\r\n");
         let result = RespValue::parse_bytes(input);
         assert!(result.is_ok());
-        let (inline_ping, _) = result.unwrap();
+        let inline_ping = result.unwrap();
         assert_eq!(
             inline_ping,
             RespValue::Array(vec![RespValue::BulkString(Some(Bytes::from("PING")))].into())

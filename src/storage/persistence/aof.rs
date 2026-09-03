@@ -1,4 +1,4 @@
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -83,8 +83,7 @@ impl AOF {
         loop {
             // all resp things are checked first before added to aof in connection
             match RespValue::parse(&mut self.buffer.clone()) {
-                Ok((resp, consumed)) => {
-                    self.buffer.advance(consumed);
+                Ok(resp) => {
                     return Ok(Some(resp));
                 }
                 Err(ParseError::Incomplete(_inner)) => {
