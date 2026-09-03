@@ -64,21 +64,12 @@ where
         self.state.clone()
     }
 
-    async fn parse_buffer(
-        &mut self,
-        last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
-    ) -> Result<
-        (
-            Option<RespValue>,
-            Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
-        ),
-        ConnectionError,
-    > {
+    async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // the above may be the ugliest code I've ever written
-        let parser = if last_incomplete_data.is_some() {
+        let parser = if self.last_incomplete_data.is_some() {
             RespValue::parse_from_incomplete(
                 &mut self.buffer,
-                ParseError::Incomplete(last_incomplete_data),
+                ParseError::Incomplete(self.last_incomplete_data.take()),
             )
         } else {
             RespValue::parse(&mut self.buffer)
@@ -90,9 +81,13 @@ where
                         .await
                         .map_err(|e| ConnectionError::AofError(e.to_string()))?;
                 }
-                Ok((Some(resp), None))
+                self.last_incomplete_data = None;
+                Ok(Some(resp))
             }
-            Err(ParseError::Incomplete(icpt_opt)) => Ok((None, icpt_opt)),
+            Err(ParseError::Incomplete(icpt_opt)) => {
+                self.last_incomplete_data = icpt_opt;
+                Ok(None)
+            }
             Err(e) => Err(ConnectionError::RespParse(e.to_string())),
         }
     }
@@ -100,9 +95,7 @@ where
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         if !self.buffer.is_empty() {
-            let incomplete = self.last_incomplete_data.take();
-            let (m_frame, m_icpt) = self.parse_buffer(incomplete).await?;
-            self.last_incomplete_data = m_icpt;
+            let m_frame = self.parse_buffer().await?;
 
             if let Some(frame) = m_frame {
                 return Ok(Some(frame));
@@ -122,11 +115,7 @@ where
                         }
                         Ok(_n) => {
                             self.state.touch();
-                            let incomplete = self.last_incomplete_data.take();
-                            let (m_frame, m_icpt) =
-                                self.parse_buffer(incomplete).await?;
-                            self.last_incomplete_data = m_icpt;
-
+                            let m_frame = self.parse_buffer().await?;
                             if let Some(frame) = m_frame {
                                 return Ok(Some(frame));
                             }

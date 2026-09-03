@@ -172,7 +172,11 @@ impl RespValue {
         Ok(res)
     }
 
-    /// Takes in &mut Bytesmut, uses split_to to take Bytes when valid
+    /// Takes in &mut Bytesmut, uses split_to to take Bytes when valid,
+    /// if it's not valid, parse error will be returned.
+    ///
+    /// If it could hypothetically be valid, it will be returned within ParseError::Incomplete
+    /// This is a recursive type to be able to parse incomplete nested arrays.
     pub fn parse(input: &mut BytesMut) -> Result<RespValue, ParseError> {
         if input.len() == 0 {
             // no current items in the array, no child items that may be incomplete
