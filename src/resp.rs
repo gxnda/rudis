@@ -110,9 +110,7 @@ impl RespValue {
         mut items: Vec<RespValue>,
     ) -> Result<(RespValue, usize), ParseError> {
         let mut next_start = start;
-        dbg!("parse from existing thinks it has length", items.capacity());
-        for _ in 0..items.capacity() {
-            dbg!(&items, &input);
+        for _ in 0..items.capacity().saturating_sub(items.len()) {
             match Self::parse_at(input, next_start) {
                 Ok((item, remaining_start_index)) => {
                     items.push(item);
@@ -135,12 +133,10 @@ impl RespValue {
     }
 
     fn parse_array(input: &mut BytesMut, start: usize) -> Result<(RespValue, usize), ParseError> {
-        dbg!("Parsing array", &input, &start);
         let (end, next_start) = Self::find_crlf(input, start)?;
         let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
             ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
         })?;
-        dbg!(len, end, next_start);
         match len {
             // null
             -1 => Ok((RespValue::Array(None), next_start)),
@@ -149,7 +145,7 @@ impl RespValue {
             // Standard array
             len if len > 0 => {
                 let items = Vec::with_capacity(len as usize);
-                return RespValue::parse_array_from_existing(input, start, items);
+                return RespValue::parse_array_from_existing(input, next_start, items);
             }
             len => Err(ParseError::LengthError(len)),
         }
@@ -230,11 +226,12 @@ impl RespValue {
                     }
                     Err(e) => return Err(e),
                 }
-
-                return RespValue::parse_array_from_existing(input, 0, items);
+                let start = if input.starts_with(b"\r\n") { 2 } else { 0 };
+                return RespValue::parse_array_from_existing(input, start, items);
             }
             ParseError::Incomplete(Some((items, None))) => {
-                return RespValue::parse_array_from_existing(input, 0, items);
+                let start = if input.starts_with(b"\r\n") { 2 } else { 0 };
+                return RespValue::parse_array_from_existing(input, start, items);
             }
             _ => panic!("Only ParseError::Incomplete should be passed into parse_from_incomplete"),
         }

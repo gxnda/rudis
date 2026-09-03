@@ -41,6 +41,7 @@ pub struct Connection<S> {
     state: Arc<ConnState>,
     aof: Option<Arc<AOF>>,
     shutdown_notify: Arc<Notify>,
+    last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
 }
 
 impl<S> Connection<S>
@@ -55,6 +56,7 @@ where
             aof,
             state: Arc::new(ConnState::new(notify.clone())),
             shutdown_notify: notify,
+            last_incomplete_data: None,
         }
     }
 
@@ -97,10 +99,10 @@ where
 
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
-        let mut last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)> = None;
         if !self.buffer.is_empty() {
-            let (m_frame, m_icpt) = self.parse_buffer(last_incomplete_data).await?;
-            last_incomplete_data = m_icpt;
+            let incomplete = self.last_incomplete_data.take();
+            let (m_frame, m_icpt) = self.parse_buffer(incomplete).await?;
+            self.last_incomplete_data = m_icpt;
 
             if let Some(frame) = m_frame {
                 return Ok(Some(frame));
@@ -111,17 +113,19 @@ where
                 read_result = self.stream.read_buf(&mut self.buffer) => {
                     match read_result {
                         Ok(0) => {
-                            if self.buffer.is_empty() {
+                            if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
                                 return Ok(None);
                             } else {
-                                // if we get nothing more but there's still stuff in the buffer)
+                                // if we get nothing more but there's still stuff in the buffer
                                 return Err(ConnectionError::Disconnected);
                             }
                         }
                         Ok(_n) => {
                             self.state.touch();
-                            let (m_frame, m_icpt) = self.parse_buffer(last_incomplete_data).await?;
-                            last_incomplete_data = m_icpt;
+                            let incomplete = self.last_incomplete_data.take();
+                            let (m_frame, m_icpt) =
+                                self.parse_buffer(incomplete).await?;
+                            self.last_incomplete_data = m_icpt;
 
                             if let Some(frame) = m_frame {
                                 return Ok(Some(frame));
@@ -130,7 +134,7 @@ where
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // if kernel buffer is empty
-                            if self.buffer.is_empty() {
+                            if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
                                 return Ok(None);
                             } else {
                                 // if we get nothing more but there's still stuff in the buffer
