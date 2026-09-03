@@ -40,37 +40,37 @@ impl RespValue {
     }
 
     /// Returns (end, start) around the \r\n, does not include \r\n.
-    fn find_crlf(input: &BytesMut, start: usize) -> Result<(usize, usize), ParseError> {
-        memmem::find(&input[start..], b"\r\n")
-            .map(|i| (start + i, start + i + 2))
+    fn find_crlf(input: &BytesMut) -> Result<(usize, usize), ParseError> {
+        memmem::find(&input, b"\r\n")
+            .map(|i| (i, i + 2))
             .ok_or(ParseError::Incomplete(None))
     }
 
-    fn parse_simple_string(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, _) = Self::find_crlf(input, start)?;
+    fn parse_simple_string(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, _) = Self::find_crlf(input)?;
         // we now know it's valid or malformed, consume the buffer
-        input.advance(start);
-        let value = String::from_utf8(input.split_to(end - start).into())
+        input.advance(1); // get rid of prefix;
+        let value = String::from_utf8(input.split_to(end - 1).into())
             .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))?;
         input.advance(2);
         Ok(RespValue::SimpleString(value))
     }
 
-    fn parse_integer(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, next_start) = Self::find_crlf(input, start)?;
+    fn parse_integer(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, next_start) = Self::find_crlf(input)?;
         // we now know it's valid or malformed, consume the buffer
         // we don't consume here so then the error message still works
-        let int = atoi::<i64>(&input[start..end]).ok_or_else(|| {
-            ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
+        let int = atoi::<i64>(&input[1..end]).ok_or_else(|| {
+            ParseError::NotAnInteger(String::from_utf8_lossy(&input[1..end]).into())
         })?;
         input.advance(next_start); // consume here instead
         Ok(RespValue::Integer(int))
     }
 
-    fn parse_bulk_string(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, next_start) = Self::find_crlf(input, start)?;
-        let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
-            ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
+    fn parse_bulk_string(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, next_start) = Self::find_crlf(input)?;
+        let len = atoi::<i64>(&input[1..end]).ok_or_else(|| {
+            ParseError::NotAnInteger(String::from_utf8_lossy(&input[1..end]).into())
         })?;
 
         match len {
@@ -99,12 +99,10 @@ impl RespValue {
 
     fn parse_array_from_existing(
         input: &mut BytesMut,
-        start: usize,
         mut items: Vec<RespValue>,
     ) -> Result<RespValue, ParseError> {
-        input.advance(start);
         for _ in 0..items.capacity().saturating_sub(items.len()) {
-            match Self::parse_at(input, 0) {
+            match Self::parse(input) {
                 Ok(item) => {
                     items.push(item);
                 }
@@ -124,11 +122,12 @@ impl RespValue {
         Ok(RespValue::Array(Some(items)))
     }
 
-    fn parse_array(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, next_start) = Self::find_crlf(input, start)?;
-        let len = atoi::<i64>(&input[start..end]).ok_or_else(|| {
-            ParseError::NotAnInteger(String::from_utf8_lossy(&input[start..end]).into())
+    fn parse_array(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, first_element_start) = Self::find_crlf(input)?;
+        let len = atoi::<i64>(&input[1..end]).ok_or_else(|| {
+            ParseError::NotAnInteger(String::from_utf8_lossy(&input[1..end]).into())
         })?;
+        input.advance(first_element_start);
         match len {
             // null
             -1 => Ok(RespValue::Array(None)),
@@ -137,24 +136,24 @@ impl RespValue {
             // Standard array
             len if len > 0 => {
                 let items = Vec::with_capacity(len as usize);
-                let res = RespValue::parse_array_from_existing(input, next_start, items);
+                let res = RespValue::parse_array_from_existing(input, items);
                 res
             }
             len => Err(ParseError::LengthError(len)),
         }
     }
 
-    fn parse_error(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, next_start) = Self::find_crlf(input, start)?;
-        let str = String::from_utf8(input[start..end].into())
+    fn parse_error(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, next_start) = Self::find_crlf(input)?;
+        let str = String::from_utf8(input[1..end].into())
             .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))?;
         input.advance(next_start);
         Ok(RespValue::Error(str))
     }
 
-    fn parse_inline(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        let (end, _) = Self::find_crlf(input, start)?;
-        let s = &input[start..end];
+    fn parse_inline(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        let (end, _) = Self::find_crlf(input)?;
+        let s = &input[0..end];
         if s.contains(&b' ') {
             return Err(ParseError::ByteError(
                 format!(
@@ -166,37 +165,29 @@ impl RespValue {
         }
 
         // valid, start consuming
-        input.advance(start);
         let res = RespValue::Array(
-            vec![RespValue::BulkString(Some(
-                input.split_to(end - start).freeze(),
-            ))]
-            .into(),
+            vec![RespValue::BulkString(Some(input.split_to(end).freeze()))].into(),
         );
         input.advance(2);
         Ok(res)
     }
 
-    fn parse_at(input: &mut BytesMut, start: usize) -> Result<RespValue, ParseError> {
-        if start >= input.len() {
+    /// Takes in &mut Bytesmut, uses split_to to take Bytes when valid
+    pub fn parse(input: &mut BytesMut) -> Result<RespValue, ParseError> {
+        if input.len() == 0 {
             // no current items in the array, no child items that may be incomplete
             return Err(ParseError::Incomplete(None));
         }
 
-        match input[start] {
+        match input[0] {
             // uses index because we don't want to consume type definition if invalid
-            b'+' => Self::parse_simple_string(input, start + 1),
-            b'-' => Self::parse_error(input, start + 1),
-            b':' => Self::parse_integer(input, start + 1),
-            b'$' => Self::parse_bulk_string(input, start + 1),
-            b'*' => Self::parse_array(input, start + 1),
-            _ => Self::parse_inline(input, start),
+            b'+' => Self::parse_simple_string(input),
+            b'-' => Self::parse_error(input),
+            b':' => Self::parse_integer(input),
+            b'$' => Self::parse_bulk_string(input),
+            b'*' => Self::parse_array(input),
+            _ => Self::parse_inline(input),
         }
-    }
-
-    /// Takes in &mut Bytesmut, uses split_to to take Bytes when valid
-    pub fn parse(input: &mut BytesMut) -> Result<RespValue, ParseError> {
-        Self::parse_at(input, 0)
     }
 
     /// Attempts to parse, continuing on from the last that was incomplete
@@ -219,12 +210,10 @@ impl RespValue {
                     }
                     Err(e) => return Err(e),
                 }
-                let start = if input.starts_with(b"\r\n") { 2 } else { 0 };
-                return RespValue::parse_array_from_existing(input, start, items);
+                return RespValue::parse_array_from_existing(input, items);
             }
             ParseError::Incomplete(Some((items, None))) => {
-                let start = if input.starts_with(b"\r\n") { 2 } else { 0 };
-                return RespValue::parse_array_from_existing(input, start, items);
+                return RespValue::parse_array_from_existing(input, items);
             }
             _ => panic!("Only ParseError::Incomplete should be passed into parse_from_incomplete"),
         }
