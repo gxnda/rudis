@@ -156,6 +156,10 @@ impl TimeoutHandler {
         self.conns.remove(&id).is_some()
     }
 
+    pub fn contains(&self, id: &u64) -> bool {
+        return self.conns.contains_key(&id);
+    }
+
     pub async fn check_all(&self) {
         self.conns
             .retain(|_, weak_state| match weak_state.upgrade() {
@@ -171,7 +175,8 @@ impl TimeoutHandler {
     }
 
     pub async fn watch(&self, mut watcher: watch::Receiver<bool>) {
-        let mut interval = tokio::time::interval(Duration::from_millis(1000)); // check every second
+        // TODO: Make not hardcoded
+        let mut interval = tokio::time::interval(Duration::from_millis(100)); // check every 100ms
         loop {
             tokio::select! {
                 _ = interval.tick() => {

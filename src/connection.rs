@@ -166,6 +166,7 @@ mod connection_tests {
     use coarsetime::Updater;
     use tokio::io::duplex;
     use tokio::io::AsyncWriteExt;
+    use tokio::sync::watch;
 
     #[tokio::test]
     async fn test_read_simple_frame() {
@@ -267,14 +268,27 @@ mod connection_tests {
 
     #[tokio::test]
     async fn test_timeout() {
-        let (_client, server) = duplex(1024);
+        let (_client, server) = tokio::io::duplex(1024);
         let mut conn = Connection::new(server, None);
+        let conn_state = conn.get_state();
 
-        // No data written to client
-        match conn.read_frame().await {
-            Err(ConnectionError::Timeout) => {} // Expected
-            other => panic!("Unexpected result: {:?}", other),
-        }
+        let timeout_handler = TimeoutHandler::new(100); // 100 ms
+        let _id = timeout_handler.add(conn_state);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(async move {
+            timeout_handler.watch(shutdown_rx).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let res = conn.read_frame().await;
+        dbg!(&res);
+        let after = res.expect_err("Expected a timeout error");
+        assert!(matches!(after, ConnectionError::Disconnected));
+
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap();
     }
 
     #[tokio::test]

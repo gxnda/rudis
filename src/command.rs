@@ -781,17 +781,18 @@ impl Command {
 
     pub fn execute(&self, storage: &StorageEngine) -> RespValue {
         match self {
-            Command::Invalid { message: _ } => RespValue::Error("Invalid message: ".to_string()),
+            Command::Invalid { message: _ } => {
+                RespValue::Error(Bytes::from_static(b"Invalid message: "))
+            }
             Command::Get { key } => {
                 // Bulk string reply if exists
                 // Nil reply if not
                 match storage.get(key) {
                     Some(RedisValue::String(s)) => RespValue::BulkString(Some(s)),
                     None => RespValue::BulkString(None),
-                    _ => RespValue::Error(
-                        "WRONGTYPE Operation against a key holding the wrong kind of value"
-                            .to_string(),
-                    ),
+                    _ => RespValue::Error(Bytes::from_static(
+                        b"WRONGTYPE Operation against a key holding the wrong kind of value",
+                    )),
                 }
             }
             Command::Set {
@@ -809,7 +810,7 @@ impl Command {
                 // check if it's a string
                 if let Some(existing) = &got {
                     if !matches!(existing, RedisValue::String(_)) {
-                        return RespValue::Error("WRONGTYPE".to_string());
+                        return RespValue::Error("WRONGTYPE".into());
                     }
                 }
 
@@ -818,7 +819,7 @@ impl Command {
                     Some(b"XX") => do_operation = storage.exists(key),
                     Some(b"IFEQ") => {
                         let Some(condition_val) = condition_val else {
-                            return RespValue::Error("syntax error".to_string());
+                            return RespValue::Error("syntax error".into());
                         };
                         do_operation = matches!(
                             &got,
@@ -827,7 +828,7 @@ impl Command {
                     }
                     Some(b"IFNE") => {
                         let Some(condition_val) = condition_val else {
-                            return RespValue::Error("syntax error".to_string());
+                            return RespValue::Error("syntax error".into());
                         };
                         do_operation = !matches!(
                             &got,
@@ -864,7 +865,7 @@ impl Command {
                     if *get {
                         RespValue::BulkString(prev)
                     } else {
-                        RespValue::SimpleString("OK".to_string())
+                        RespValue::SimpleString("OK".into())
                     }
                 } else if *get {
                     RespValue::BulkString(prev)
@@ -897,21 +898,21 @@ impl Command {
                 match storage.incr(key) {
                     Ok(new_value) => RespValue::Integer(new_value),
                     Err(IncrError::NotAnInteger) => RespValue::Error(
-                        "Error attempting to increment value, was not an integer".to_string(),
+                        "Error attempting to increment value, was not an integer".into(),
                     ),
-                    Err(IncrError::Overflow) => RespValue::Error(
-                        "Error attempting to increment value, overflow".to_string(),
-                    ),
+                    Err(IncrError::Overflow) => {
+                        RespValue::Error("Error attempting to increment value, overflow".into())
+                    }
                 }
             }
 
             Command::Decr { key } => match storage.decr(key) {
                 Ok(new_value) => RespValue::Integer(new_value),
                 Err(IncrError::NotAnInteger) => RespValue::Error(
-                    "Error attempting to increment value, was not an integer".to_string(),
+                    "Error attempting to increment value, was not an integer".into(),
                 ),
                 Err(IncrError::Overflow) => {
-                    RespValue::Error("Error attempting to increment value, underflow".to_string())
+                    RespValue::Error("Error attempting to increment value, underflow".into())
                 }
             },
 
@@ -919,7 +920,7 @@ impl Command {
                 if message.is_some() {
                     RespValue::BulkString(message.clone())
                 } else {
-                    RespValue::SimpleString("PONG".to_string())
+                    RespValue::SimpleString("PONG".into())
                 }
             }
 
@@ -927,7 +928,7 @@ impl Command {
 
             Command::FlushAll {} => {
                 storage.clear();
-                RespValue::SimpleString("OK".to_string())
+                RespValue::SimpleString("OK".into())
             }
 
             Command::Keys { pattern } => match storage.get_matching_keys(pattern) {
@@ -936,7 +937,7 @@ impl Command {
                         .map(|key| RespValue::BulkString(Some(key.clone())))
                         .collect(),
                 )),
-                Err(e) => RespValue::Error(e.to_string()),
+                Err(e) => RespValue::Error(e.to_string().into()),
             },
 
             Command::TTL { key } => match storage.get_expire(key) {
@@ -994,7 +995,7 @@ impl Command {
                     if type_error {
                         RespValue::Error(
                             "WRONGTYPE Operation against a key holding the wrong kind of value"
-                                .to_string(),
+                                .into(),
                         )
                     } else {
                         RespValue::Integer(len as i64)
@@ -1030,7 +1031,7 @@ impl Command {
                     if type_error {
                         RespValue::Error(
                             "WRONGTYPE Operation against a key holding the wrong kind of value"
-                                .to_string(),
+                                .into(),
                         )
                     } else {
                         RespValue::Integer(new_len as i64)
@@ -1094,11 +1095,11 @@ impl Command {
                 Some(RedisValue::List(arr)) => RespValue::Integer(arr.len() as i64),
                 None => RespValue::Integer(0),
                 _ => RespValue::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
             },
 
-            _ => RespValue::Error("ERROR command not implemented yet.".to_string()),
+            _ => RespValue::Error("ERROR command not implemented yet.".into()),
         }
     }
 }
@@ -1128,7 +1129,7 @@ mod tests {
         ));
 
         // Non-array command
-        let resp = RespValue::SimpleString("SET foo bar".to_string());
+        let resp = RespValue::SimpleString("SET foo bar".into());
         assert!(matches!(
             Command::from_resp(resp),
             Err(ParseError::InvalidCommand(_))
@@ -1153,7 +1154,7 @@ mod tests {
         let cmd = Command::from_resp(set_cmd).unwrap();
         assert!(matches!(cmd, Command::Set { .. }));
         let response = cmd.execute(&storage);
-        assert_eq!(response, RespValue::SimpleString("OK".to_string()));
+        assert_eq!(response, RespValue::SimpleString("OK".into()));
 
         // Test GET
         let get_cmd = resp_array(vec![b"GET", key]);
@@ -1258,7 +1259,7 @@ mod tests {
         let ping_cmd = resp_array(vec![b"PING"]);
         let cmd = Command::from_resp(ping_cmd).unwrap();
         let response = cmd.execute(&storage);
-        assert_eq!(response, RespValue::SimpleString("PONG".to_string()));
+        assert_eq!(response, RespValue::SimpleString("PONG".into()));
 
         // PING with message
         let ping_cmd = resp_array(vec![b"PING", b"Hello"]);
@@ -1299,7 +1300,7 @@ mod tests {
         let flush_cmd = resp_array(vec![b"FLUSHALL"]);
         let cmd = Command::from_resp(flush_cmd).unwrap();
         let response = cmd.execute(&storage);
-        assert_eq!(response, RespValue::SimpleString("OK".to_string()));
+        assert_eq!(response, RespValue::SimpleString("OK".into()));
         assert!(storage.get(&Bytes::from_static(b"key1")).is_none());
     }
 

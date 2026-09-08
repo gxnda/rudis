@@ -1,15 +1,15 @@
 use atoi::atoi;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use memchr::memmem;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum RespValue {
-    SimpleString(String),
+    SimpleString(Bytes),
     BulkString(Option<Bytes>),
     Array(Option<Vec<RespValue>>),
     Integer(i64),
-    Error(String),
+    Error(Bytes),
 }
 
 #[derive(Debug, Error)]
@@ -25,6 +25,20 @@ pub enum ParseError {
     ByteError(String),
     #[error("Invalid length: {0}")]
     LengthError(i64),
+}
+
+fn digits(num: i64) -> usize {
+    // TODO: Inspect for performance improvements
+    if num == 0 {
+        return 1;
+    }
+    let mut total = 0;
+    let mut divved = num;
+    while divved != 0 {
+        divved /= 10;
+        total += 1;
+    }
+    total
 }
 
 impl RespValue {
@@ -50,10 +64,9 @@ impl RespValue {
         let (end, _) = Self::find_crlf(input)?;
         // we now know it's valid or malformed, consume the buffer
         input.advance(1); // get rid of prefix;
-        let value = String::from_utf8(input.split_to(end - 1).into())
-            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in simple string".to_string()))?;
+        let str = input.split_to(end - 1).freeze();
         input.advance(2);
-        Ok(RespValue::SimpleString(value))
+        Ok(RespValue::SimpleString(str))
     }
 
     fn parse_integer(input: &mut BytesMut) -> Result<RespValue, ParseError> {
@@ -144,11 +157,11 @@ impl RespValue {
     }
 
     fn parse_error(input: &mut BytesMut) -> Result<RespValue, ParseError> {
-        let (end, next_start) = Self::find_crlf(input)?;
-        let str = String::from_utf8(input[1..end].into())
-            .map_err(|_| ParseError::ByteError("Invalid UTF-8 in error message".to_string()))?;
-        input.advance(next_start);
-        Ok(RespValue::Error(str))
+        let (end, _) = Self::find_crlf(input)?;
+        input.advance(1); // get rid of prefix;
+        let err = input.split_to(end - 1).freeze();
+        input.advance(2);
+        Ok(RespValue::Error(err))
     }
 
     fn parse_inline(input: &mut BytesMut) -> Result<RespValue, ParseError> {
@@ -228,70 +241,90 @@ impl RespValue {
         RespValue::parse(&mut BytesMut::from(bytes.as_ref()))
     }
 
-    pub fn serialize(self) -> Vec<u8> {
-        match self {
-            RespValue::SimpleString(s) => Self::serialize_simple_string(s),
-            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt),
-            RespValue::Array(opt) => Self::serialize_array(opt),
-            RespValue::Integer(i) => Self::serialize_integer(i),
-            RespValue::Error(e) => Self::serialize_error(e),
+    fn serialized_len(&self) -> usize {
+        match &self {
+            &RespValue::SimpleString(s) => 1 + s.len() + 2,
+            &RespValue::Error(e) => 1 + e.len() + 2,
+            &RespValue::BulkString(Some(s)) => {
+                1 + digits(s.len().try_into().expect("Can't have negative len")) + 2 + s.len() + 2
+            }
+            &RespValue::BulkString(None) => {
+                b"$-1\r\n".len() // should optimise in compiler
+            }
+            &RespValue::Array(Some(arr)) => arr.iter().map(|el| el.serialized_len()).sum(),
+            &RespValue::Array(None) => {
+                b"*-1\r\n".len() // should optimise in compiler
+            }
+            &RespValue::Integer(i) => 1 + digits(*i) + 2,
         }
     }
 
-    fn serialize_simple_string(s: String) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(3 + s.len());
-        bytes.push(b'+');
-        bytes.extend(Bytes::from(s));
-        bytes.extend(b"\r\n");
-        bytes
+    pub fn serialize(self) -> Bytes {
+        // pre alloc return bytes
+        let len = self.serialized_len();
+        match self {
+            RespValue::SimpleString(s) => Self::serialize_simple_string(s, len),
+            RespValue::BulkString(opt) => Self::serialize_bulk_string(opt, len),
+            RespValue::Array(opt) => Self::serialize_array(opt, len),
+            RespValue::Integer(i) => Self::serialize_integer(i, len),
+            RespValue::Error(e) => Self::serialize_error(e, len),
+        }
     }
 
-    fn serialize_error(e: String) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(3 + e.len());
-        bytes.push(b'-');
-        bytes.extend(e.as_bytes());
+    fn serialize_simple_string(s: Bytes, len: usize) -> Bytes {
+        let mut bytes = BytesMut::with_capacity(len);
+        bytes.put_u8(b'+');
+        bytes.extend(s);
         bytes.extend(b"\r\n");
-        bytes
+        bytes.freeze()
     }
 
-    fn serialize_integer(i: i64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(b':');
+    fn serialize_error(e: Bytes, len: usize) -> Bytes {
+        let mut bytes = BytesMut::with_capacity(len);
+        bytes.put_u8(b'-');
+        bytes.extend(e);
+        bytes.extend(b"\r\n");
+        bytes.freeze()
+    }
+
+    fn serialize_integer(i: i64, len: usize) -> Bytes {
+        let mut bytes = BytesMut::with_capacity(len);
+        bytes.put_u8(b':');
         bytes.extend(i.to_string().as_bytes()); // normally small, itoa slower overall in
                                                 // redis-benchmark, so this will do, I could add
                                                 // some sort of threshold where it switches
         bytes.extend(b"\r\n");
-        bytes
+        bytes.freeze()
     }
 
-    fn serialize_bulk_string(s: Option<Bytes>) -> Vec<u8> {
+    fn serialize_bulk_string(s: Option<Bytes>, len: usize) -> Bytes {
         match s {
             Some(s) => {
-                let mut bytes = Vec::new();
-                bytes.push(b'$');
+                let mut bytes = BytesMut::with_capacity(len);
+                bytes.put_u8(b'$');
                 bytes.extend(s.len().to_string().as_bytes());
-                bytes.extend(b"\r\n");
+                bytes.put_slice(b"\r\n");
                 bytes.extend(s);
-                bytes.extend(b"\r\n");
-                bytes
+                bytes.put_slice(b"\r\n");
+                bytes.freeze()
             }
-            None => b"$-1\r\n".to_vec(),
+            None => Bytes::from_static(b"$-1\r\n"),
         }
     }
 
-    fn serialize_array(opt: Option<Vec<RespValue>>) -> Vec<u8> {
+    fn serialize_array(opt: Option<Vec<RespValue>>, len: usize) -> Bytes {
         match opt {
             Some(elements) => {
-                let mut bytes: Vec<u8> = Vec::new();
-                bytes.push(b'*');
+                let mut bytes = BytesMut::with_capacity(len);
+                bytes.put_u8(b'*');
                 bytes.extend(Bytes::from(elements.len().to_string()));
                 bytes.extend(b"\r\n");
                 for elem in elements {
                     bytes.extend(elem.serialize());
                 }
-                bytes
+                bytes.freeze()
             }
-            None => b"*-1\r\n".to_vec(),
+            None => Bytes::from_static(b"*-1\r\n"),
         }
     }
 }
@@ -304,14 +337,17 @@ mod tests {
     fn test_simple_string() {
         let input = &Bytes::from_static(b"+OK\r\n");
         let result = RespValue::parse_bytes(input).unwrap();
-        assert_eq!(result, RespValue::SimpleString("OK".to_string()));
+        assert_eq!(result, RespValue::SimpleString(Bytes::from_static(b"OK")));
     }
 
     #[test]
     fn test_error() {
         let input = &Bytes::from_static(b"-ERR unknown command\r\n");
         let result = RespValue::parse_bytes(input).unwrap();
-        assert_eq!(result, RespValue::Error("ERR unknown command".to_string()));
+        assert_eq!(
+            result,
+            RespValue::Error(Bytes::from_static(b"ERR unknown command"))
+        );
     }
 
     #[test]
@@ -400,7 +436,7 @@ mod tests {
             result,
             RespValue::Array(Option::from(vec![
                 RespValue::Integer(1),
-                RespValue::SimpleString("OK".to_string()),
+                RespValue::SimpleString(Bytes::from_static(b"OK")),
                 RespValue::BulkString(None)
             ]))
         );
@@ -414,7 +450,7 @@ mod tests {
             result,
             RespValue::Array(Option::from(vec![
                 RespValue::Array(Option::from(vec![RespValue::Integer(1)])),
-                RespValue::SimpleString("OK".to_string())
+                RespValue::SimpleString(Bytes::from_static(b"OK"))
             ]))
         );
     }
@@ -482,50 +518,50 @@ mod tests {
 
     #[test]
     fn test_serialize_simple_string() {
-        let value = RespValue::SimpleString("OK".to_string());
-        assert_eq!(value.serialize(), b"+OK\r\n");
+        let value = RespValue::SimpleString(Bytes::from_static(b"OK"));
+        assert_eq!(value.serialize().as_ref(), b"+OK\r\n");
     }
 
     #[test]
     fn test_serialize_error() {
-        let value = RespValue::Error("ERR unknown command".to_string());
-        assert_eq!(value.serialize(), b"-ERR unknown command\r\n");
+        let value = RespValue::Error(Bytes::from_static(b"ERR unknown command"));
+        assert_eq!(value.serialize().as_ref(), b"-ERR unknown command\r\n");
     }
 
     #[test]
     fn test_serialize_integer_positive() {
         let value = RespValue::Integer(1000);
-        assert_eq!(value.serialize(), b":1000\r\n");
+        assert_eq!(value.serialize().as_ref(), b":1000\r\n");
     }
 
     #[test]
     fn test_serialize_integer_zero() {
         let value = RespValue::Integer(0);
-        assert_eq!(value.serialize(), b":0\r\n");
+        assert_eq!(value.serialize().as_ref(), b":0\r\n");
     }
 
     #[test]
     fn test_serialize_integer_negative() {
         let value = RespValue::Integer(-42);
-        assert_eq!(value.serialize(), b":-42\r\n");
+        assert_eq!(value.serialize().as_ref(), b":-42\r\n");
     }
 
     #[test]
     fn test_serialize_bulk_string() {
         let value = RespValue::BulkString(Some(Bytes::from_static(b"hello")));
-        assert_eq!(value.serialize(), b"$5\r\nhello\r\n");
+        assert_eq!(value.serialize().as_ref(), b"$5\r\nhello\r\n");
     }
 
     #[test]
     fn test_serialize_bulk_string_empty() {
         let value = RespValue::BulkString(Some(Bytes::from_static(b"")));
-        assert_eq!(value.serialize(), b"$0\r\n\r\n");
+        assert_eq!(value.serialize().as_ref(), b"$0\r\n\r\n");
     }
 
     #[test]
     fn test_serialize_bulk_string_null() {
         let value = RespValue::BulkString(None);
-        assert_eq!(value.serialize(), b"$-1\r\n");
+        assert_eq!(value.serialize().as_ref(), b"$-1\r\n");
     }
 
     #[test]
@@ -534,37 +570,40 @@ mod tests {
             RespValue::BulkString(Some(Bytes::from_static(b"foo"))),
             RespValue::BulkString(Some(Bytes::from_static(b"bar"))),
         ]));
-        assert_eq!(value.serialize(), b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n");
+        assert_eq!(
+            value.serialize().as_ref(),
+            b"*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n"
+        );
     }
 
     #[test]
     fn test_serialize_array_empty() {
         let value = RespValue::Array(Some(vec![]));
-        assert_eq!(value.serialize(), b"*0\r\n");
+        assert_eq!(value.serialize().as_ref(), b"*0\r\n");
     }
 
     #[test]
     fn test_serialize_array_null() {
         let value = RespValue::Array(None);
-        assert_eq!(value.serialize(), b"*-1\r\n");
+        assert_eq!(value.serialize().as_ref(), b"*-1\r\n");
     }
 
     #[test]
     fn test_serialize_array_mixed_types() {
         let value = RespValue::Array(Some(vec![
             RespValue::Integer(1),
-            RespValue::SimpleString("OK".to_string()),
+            RespValue::SimpleString(Bytes::from_static(b"OK")),
             RespValue::BulkString(None),
         ]));
-        assert_eq!(value.serialize(), b"*3\r\n:1\r\n+OK\r\n$-1\r\n");
+        assert_eq!(value.serialize().as_ref(), b"*3\r\n:1\r\n+OK\r\n$-1\r\n");
     }
 
     #[test]
     fn test_serialize_nested_array() {
         let value = RespValue::Array(Some(vec![
             RespValue::Array(Some(vec![RespValue::Integer(1)])),
-            RespValue::SimpleString("OK".to_string()),
+            RespValue::SimpleString(Bytes::from_static(b"OK")),
         ]));
-        assert_eq!(value.serialize(), b"*2\r\n*1\r\n:1\r\n+OK\r\n");
+        assert_eq!(value.serialize().as_ref(), b"*2\r\n*1\r\n:1\r\n+OK\r\n");
     }
 }
