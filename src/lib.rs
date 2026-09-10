@@ -9,7 +9,6 @@ pub mod storage {
 }
 pub mod command;
 pub mod config;
-pub mod conn_state;
 pub mod connection;
 pub mod server;
 

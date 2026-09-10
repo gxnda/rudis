@@ -1,13 +1,9 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::sync::Arc;
 
-use dashmap::DashMap;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
 
-use crate::conn_state::ConnState;
 use crate::storage::persistence::aof::AOF;
 use crate::storage::persistence::errors::PersistenceError;
 use crate::Config;
@@ -46,7 +42,6 @@ pub struct Server {
     shutdown_rx: watch::Receiver<bool>,
     aof: Option<Arc<AOF>>,
     connection_semaphore: Arc<Semaphore>,
-    timeout_handler: Arc<TimeoutHandler>,
 }
 
 impl Server {
@@ -66,19 +61,12 @@ impl Server {
                     true => Some(Arc::new(AOF::new(config).await?)),
                     false => None,
                 },
-                timeout_handler: Arc::new(TimeoutHandler::new(3000)),
             },
             shutdown_tx,
         ))
     }
 
     pub async fn run(&mut self) {
-        let timeout_handler = self.timeout_handler.clone();
-        let shutdown_rx_watcher = self.shutdown_rx.clone();
-        tokio::spawn(async move {
-            // double clone here :((
-            timeout_handler.watch(shutdown_rx_watcher).await;
-        });
         loop {
             tokio::select! {
                 conn = self.listener.accept() => match conn {
@@ -93,13 +81,11 @@ impl Server {
                         let storage = self.storage.clone();
                         let aof = self.aof.clone();
                         let conn = Connection::new(stream, aof);
-                        let id = self.timeout_handler.add(conn.get_state());
-                        let cloned_handler = self.timeout_handler.clone();
                         // async move: it moves all variables into tokio, so permit is dropped when
                         // it completes.
                         tokio::spawn(async move {
                             let _permit = permit;
-                            if let Err(e) = Self::handle_connection(conn, storage, cloned_handler, id).await {
+                            if let Err(e) = Self::handle_connection(conn, storage).await {
                                 eprintln!("Connection error: {e}");
                             };
                         });
@@ -116,76 +102,12 @@ impl Server {
     async fn handle_connection(
         mut conn: Connection<TcpStream>,
         storage: Arc<StorageEngine>,
-        timeout_handler: Arc<TimeoutHandler>,
-        id: u64,
     ) -> Result<(), ServerError> {
-        // all AOF is handled in parse_buffer of Connections
+        // all AOF is handled in parse_buffer of Connections TODO: Change that lmao
         while let Some(resp) = conn.read_frame().await? {
             let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
             conn.write_response(cmd.execute(&storage)).await?;
         }
-        // I don't think I need to manually remove connection here from timeout handler because of
-        // the weak reference, which means it gets popped when its done
-        // but this is faster I think?
-        timeout_handler.remove(id);
         Ok(())
-    }
-}
-
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
-pub struct TimeoutHandler {
-    conns: DashMap<u64, Weak<ConnState>>,
-    timeout_ms: u64,
-}
-
-impl TimeoutHandler {
-    pub fn new(timeout_ms: u64) -> Self {
-        TimeoutHandler {
-            conns: DashMap::new(),
-            timeout_ms,
-        }
-    }
-
-    pub fn add(&self, conn: Arc<ConnState>) -> u64 {
-        let id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
-        self.conns.insert(id, Arc::downgrade(&conn));
-        id
-    }
-
-    pub fn remove(&self, id: u64) -> bool {
-        self.conns.remove(&id).is_some()
-    }
-
-    pub fn contains(&self, id: &u64) -> bool {
-        return self.conns.contains_key(&id);
-    }
-
-    pub async fn check_all(&self) {
-        self.conns
-            .retain(|_, weak_state| match weak_state.upgrade() {
-                Some(state) => {
-                    let expired = state.is_timed_out(self.timeout_ms);
-                    if expired {
-                        state.shutdown();
-                    }
-                    !expired
-                }
-                _ => false, // been dealloced already
-            });
-    }
-
-    pub async fn watch(&self, mut watcher: watch::Receiver<bool>) {
-        // TODO: Make not hardcoded
-        let mut interval = tokio::time::interval(Duration::from_millis(100)); // check every 100ms
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    self.check_all().await;
-                }
-                _ = watcher.changed() => {
-                    break;
-                }
-            }
-        }
     }
 }
