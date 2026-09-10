@@ -40,6 +40,7 @@ pub struct Connection<S> {
     buffer: BytesMut,
     aof: Option<Arc<AOF>>,
     last_incomplete_data: Option<(Vec<RespValue>, Option<Box<ParseError>>)>,
+    timeout: Duration,
 }
 
 impl<S> Connection<S>
@@ -52,11 +53,15 @@ where
             buffer: BytesMut::new(),
             aof,
             last_incomplete_data: None,
+            timeout: Duration::from_millis(300),
         }
     }
 
+    pub fn set_timeout(&mut self, new: Duration) {
+        self.timeout = new;
+    }
+
     async fn parse_buffer(&mut self) -> Result<Option<RespValue>, ConnectionError> {
-        // the above may be the ugliest code I've ever written
         let parser = if self.last_incomplete_data.is_some() {
             RespValue::parse_from_incomplete(
                 &mut self.buffer,
@@ -83,46 +88,31 @@ where
         }
     }
 
+    async fn handle_empty_stream(&self) -> Result<Option<RespValue>, ConnectionError> {
+        if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
+            return Ok(None);
+        } else {
+            return Err(ConnectionError::Disconnected);
+        }
+    }
+
     pub async fn read_frame(&mut self) -> Result<Option<RespValue>, ConnectionError> {
         // Reads complete RESP objects from stream
         if !self.buffer.is_empty() {
-            let m_frame = self.parse_buffer().await?;
-
-            if let Some(frame) = m_frame {
+            if let Some(frame) = self.parse_buffer().await? {
                 return Ok(Some(frame));
             }
         }
-
-        let read_timeout = Duration::from_millis(300);
-        timeout(read_timeout, async {
+        // sets timeout for entire command, effectively giving the client a window to send a whole
+        // command, slightly more efficient but not great for massive data loads
+        timeout(self.timeout, async {
             loop {
-                match self.stream.read_buf(&mut self.buffer).await {
-                    Ok(0) => {
-                        if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
-                            return Ok(None);
-                        } else {
-                            // if we get nothing more but there's still stuff in the buffer
-                            return Err(ConnectionError::Disconnected);
-                        }
-                    }
-                    Ok(_n) => {
-                        let m_frame = self.parse_buffer().await?;
-                        if let Some(frame) = m_frame {
+                match self.stream.read_buf(&mut self.buffer).await? {
+                    0 => return self.handle_empty_stream().await,
+                    _ => {
+                        if let Some(frame) = self.parse_buffer().await? {
                             return Ok(Some(frame));
                         }
-                        // else continue looping, still not complete and we're still getting data
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // if kernel buffer is empty
-                        if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
-                            return Ok(None);
-                        } else {
-                            // if we get nothing more but there's still stuff in the buffer
-                            return Err(ConnectionError::Disconnected);
-                        }
-                    }
-                    Err(e) => {
-                        return Err(e.into());
                     }
                 }
             }
@@ -161,24 +151,33 @@ mod connection_tests {
     }
 
     #[tokio::test]
-    async fn test_read_incomplete_frame() {
-        // TODO: fixme
-        //
-        // let (mut client, server) = duplex(1024);
-        // let mut conn = Connection::new(server, None);
-        // Updater::new(10).start().unwrap();
-        // let conn_state = conn.get_state();
-        // client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
-        // assert!(conn.read_frame().await.is_err());
-        //
-        // client.write_all(b"$3\r\nkey\r\n").await.unwrap();
-        // assert_eq!(
-        //     frame,
-        //     Some(RespValue::Array(Some(vec![
-        //         RespValue::BulkString(Some(Bytes::from("GET"))),
-        //         RespValue::BulkString(Some(Bytes::from("key"))),
-        //     ])))
-        // );
+    async fn test_read_incomplete_array() {
+        let (mut client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+        client.write_all(b"*2\r\n$3\r\nGET\r\n").await.unwrap();
+        assert!(conn.read_frame().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_incomplete_bulk_string() {
+        let (mut client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+        client.write_all(b"$10\r\nHello Wo").await.unwrap();
+        assert!(conn
+            .read_frame()
+            .await
+            .is_err_and(|e| matches!(e, ConnectionError::Timeout)));
+    }
+
+    #[tokio::test]
+    async fn test_read_incomplete_integer() {
+        let (mut client, server) = duplex(1024);
+        let mut conn = Connection::new(server, None);
+        client.write_all(b":1000").await.unwrap();
+        assert!(conn
+            .read_frame()
+            .await
+            .is_err_and(|e| matches!(e, ConnectionError::Timeout)));
     }
 
     #[tokio::test]
@@ -233,31 +232,13 @@ mod connection_tests {
         assert!(matches!(result, Err(ConnectionError::RespParse(_))));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_timeout() {
-        // TODO: fixme
-        //
-        // let (_client, server) = tokio::io::duplex(1024);
-        // let mut conn = Connection::new(server, None);
-        // let conn_state = conn.get_state();
-        //
-        // let timeout_handler = TimeoutHandler::new(100); // 100 ms
-        // let _id = timeout_handler.add(conn_state);
-        //
-        // let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        // let handle = tokio::spawn(async move {
-        //     timeout_handler.watch(shutdown_rx).await;
-        // });
-        //
-        // tokio::time::sleep(Duration::from_millis(150)).await;
-        //
-        // let res = conn.read_frame().await;
-        // dbg!(&res);
-        // let after = res.expect_err("Expected a timeout error");
-        // assert!(matches!(after, ConnectionError::Disconnected));
-        //
-        // shutdown_tx.send(true).unwrap();
-        // handle.await.unwrap();
+        let (_client, server) = tokio::io::duplex(1024);
+        let mut conn = Connection::new(server, None);
+        conn.set_timeout(Duration::from_millis(100));
+        let err = conn.read_frame().await.expect_err("Expected timeout");
+        assert!(matches!(err, ConnectionError::Timeout));
     }
 
     #[tokio::test]
