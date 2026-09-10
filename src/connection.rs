@@ -88,7 +88,7 @@ where
         }
     }
 
-    async fn handle_empty_stream(&self) -> Result<Option<RespValue>, ConnectionError> {
+    fn on_eof(&self) -> Result<Option<RespValue>, ConnectionError> {
         if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
             return Ok(None);
         } else {
@@ -108,7 +108,7 @@ where
         timeout(self.timeout, async {
             loop {
                 match self.stream.read_buf(&mut self.buffer).await? {
-                    0 => return self.handle_empty_stream().await,
+                    0 => return self.on_eof(),
                     _ => {
                         if let Some(frame) = self.parse_buffer().await? {
                             return Ok(Some(frame));
