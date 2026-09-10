@@ -90,9 +90,9 @@ where
 
     fn on_eof(&self) -> Result<Option<RespValue>, ConnectionError> {
         if self.buffer.is_empty() && self.last_incomplete_data.is_none() {
-            return Ok(None);
+            Ok(None)
         } else {
-            return Err(ConnectionError::Disconnected);
+            Err(ConnectionError::Disconnected)
         }
     }
 
