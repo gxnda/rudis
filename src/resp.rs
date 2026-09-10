@@ -55,7 +55,7 @@ impl RespValue {
 
     /// Returns (end, start) around the \r\n, does not include \r\n.
     fn find_crlf(input: &BytesMut) -> Result<(usize, usize), ParseError> {
-        memmem::find(&input, b"\r\n")
+        memmem::find(input, b"\r\n")
             .map(|i| (i, i + 2))
             .ok_or(ParseError::Incomplete(None))
     }
@@ -149,8 +149,8 @@ impl RespValue {
             // Standard array
             len if len > 0 => {
                 let items = Vec::with_capacity(len as usize);
-                let res = RespValue::parse_array_from_existing(input, items);
-                res
+                
+                RespValue::parse_array_from_existing(input, items)
             }
             len => Err(ParseError::LengthError(len)),
         }
@@ -171,7 +171,7 @@ impl RespValue {
             return Err(ParseError::ByteError(
                 format!(
                     "Inline command contains a space: {}",
-                    str::from_utf8(&s).unwrap_or("Error parsing command")
+                    str::from_utf8(s).unwrap_or("Error parsing command")
                 )
                 .to_string(),
             ));
@@ -191,7 +191,7 @@ impl RespValue {
     /// If it could hypothetically be valid, it will be returned within ParseError::Incomplete
     /// This is a recursive type to be able to parse incomplete nested arrays.
     pub fn parse(input: &mut BytesMut) -> Result<RespValue, ParseError> {
-        if input.len() == 0 {
+        if input.is_empty() {
             // no current items in the array, no child items that may be incomplete
             return Err(ParseError::Incomplete(None));
         }
@@ -227,10 +227,10 @@ impl RespValue {
                     }
                     Err(e) => return Err(e),
                 }
-                return RespValue::parse_array_from_existing(input, items);
+                RespValue::parse_array_from_existing(input, items)
             }
             ParseError::Incomplete(Some((items, None))) => {
-                return RespValue::parse_array_from_existing(input, items);
+                RespValue::parse_array_from_existing(input, items)
             }
             _ => panic!("Only ParseError::Incomplete should be passed into parse_from_incomplete"),
         }
@@ -242,20 +242,20 @@ impl RespValue {
     }
 
     fn serialized_len(&self) -> usize {
-        match &self {
-            &RespValue::SimpleString(s) => 1 + s.len() + 2,
-            &RespValue::Error(e) => 1 + e.len() + 2,
-            &RespValue::BulkString(Some(s)) => {
+        match self {
+            RespValue::SimpleString(s) => 1 + s.len() + 2,
+            RespValue::Error(e) => 1 + e.len() + 2,
+            RespValue::BulkString(Some(s)) => {
                 1 + digits(s.len().try_into().expect("Can't have negative len")) + 2 + s.len() + 2
             }
-            &RespValue::BulkString(None) => {
+            RespValue::BulkString(None) => {
                 b"$-1\r\n".len() // should optimise in compiler
             }
-            &RespValue::Array(Some(arr)) => arr.iter().map(|el| el.serialized_len()).sum(),
-            &RespValue::Array(None) => {
+            RespValue::Array(Some(arr)) => arr.iter().map(|el| el.serialized_len()).sum(),
+            RespValue::Array(None) => {
                 b"*-1\r\n".len() // should optimise in compiler
             }
-            &RespValue::Integer(i) => 1 + digits(*i) + 2,
+            RespValue::Integer(i) => 1 + digits(*i) + 2,
         }
     }
 
