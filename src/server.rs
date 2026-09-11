@@ -91,7 +91,7 @@ impl Server {
                             };
                         });
                     }
-                    Err(e) => eprintln!("Connection failed: {:?}", e),
+                    Err(e) => eprintln!("Connection failed: {e:?}"),
                 },
                 _ = self.shutdown_rx.changed() => {
                     break;
