@@ -27,18 +27,17 @@ pub enum ParseError {
     LengthError(i64),
 }
 
-fn digits(num: i64) -> usize {
-    // TODO: Inspect for performance improvements
-    if num == 0 {
-        return 1;
+#[inline]
+pub fn digits(num: i64) -> usize {
+    // Match statement will probably always be faster due to the distribution of RESP lengths
+    match num {
+        ..=-1 => 2, // negative sign, the only valid negative resp length is -1
+        0..=9 => 1,
+        10..=99 => 2,
+        100..=999 => 3,
+        1000..=9999 => 4,
+        _ => num.ilog10() as usize + 1,
     }
-    let mut total = 0;
-    let mut divved = num;
-    while divved != 0 {
-        divved /= 10;
-        total += 1;
-    }
-    total
 }
 
 impl RespValue {
@@ -149,7 +148,7 @@ impl RespValue {
             // Standard array
             len if len > 0 => {
                 let items = Vec::with_capacity(len as usize);
-                
+
                 RespValue::parse_array_from_existing(input, items)
             }
             len => Err(ParseError::LengthError(len)),
