@@ -6,11 +6,8 @@ use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
 use regex::bytes::Regex;
-use serde::de::{self, Error, Visitor};
-use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::VecDeque;
-use std::fmt;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -31,7 +28,7 @@ pub struct DataEntry {
     pub expiry: Option<u64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum RedisValue {
     Integer(i64),
     String(Bytes),
@@ -61,139 +58,11 @@ where
     Ok(Arc::new(map))
 }
 
-impl Serialize for RedisValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            RedisValue::Integer(i) => serializer.serialize_i64(*i),
-            RedisValue::String(b) => serializer.serialize_bytes(b),
-            RedisValue::List(list) => {
-                let mut seq = serializer.serialize_seq(Some(list.len() + 1))?;
-                seq.serialize_element(&1)?;
-                for item in list {
-                    seq.serialize_element(item)?;
-                }
-                seq.end()
-            }
-            RedisValue::Hash(hash) => {
-                let mut map = serializer.serialize_map(Some(hash.len()))?;
-                // not using par_iter bc serde isn't threadsafe
-                for entry in hash.iter() {
-                    map.serialize_entry(entry.key(), entry.value())?;
-                }
-                map.end()
-            }
-            RedisValue::Set(set) => {
-                let mut seq = serializer.serialize_seq(Some(set.len() + 1))?;
-                seq.serialize_element(&2)?;
-                for item in set.iter() {
-                    seq.serialize_element(&*item)?;
-                }
-                seq.end()
-            }
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for RedisValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct RedisValueVisitor;
-        impl<'de> Visitor<'de> for RedisValueVisitor {
-            type Value = RedisValue;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("Redis Value, any of: Integer, String, Hash, List, Set.")
-            }
-
-            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(RedisValue::Integer(v))
-            }
-
-            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                if v <= i64::MAX as u64 {
-                    Ok(RedisValue::Integer(v as i64))
-                } else {
-                    Err(Error::custom("u64 out of range for Integer"))
-                }
-            }
-
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(RedisValue::String(Bytes::from((*v).to_owned())))
-            }
-
-            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(RedisValue::String(Bytes::from(v)))
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(RedisValue::String(Bytes::from(v.to_string())))
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::SeqAccess<'de>,
-            {
-                match seq.next_element::<i32>()? {
-                    Some(2) => {
-                        // Set
-                        let set: DashSet<Bytes> = DashSet::new();
-                        while let Some(elem) = seq.next_element::<Vec<u8>>()? {
-                            set.insert(Bytes::from(elem));
-                        }
-                        Ok(RedisValue::Set(set))
-                    }
-                    _ => {
-                        // List
-                        let mut deque = VecDeque::new();
-                        while let Some(elem) = seq.next_element::<Vec<u8>>()? {
-                            deque.push_back(Bytes::from(elem));
-                        }
-                        Ok(RedisValue::List(deque))
-                    }
-                }
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::MapAccess<'de>,
-            {
-                let hash: DashMap<Bytes, Bytes> = DashMap::new();
-                while let Some(entry) = map.next_entry()? {
-                    hash.insert(entry.0, entry.1);
-                }
-                Ok(RedisValue::Hash(hash))
-            }
-        }
-
-        deserializer.deserialize_any(RedisValueVisitor)
-    }
-}
-
 impl RedisValue {
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             RedisValue::Integer(i) => Some(*i),
-            RedisValue::String(s) => std::str::from_utf8(s).ok()?.parse().ok(),
+            RedisValue::String(s) => atoi::<i64>(s),
             _ => None,
         }
     }
@@ -256,15 +125,15 @@ impl StorageEngine {
 
     #[inline]
     pub fn get_at(&self, key: &Bytes, now: u64) -> Option<RedisValue> {
-        if let Some(entry) = self.data.get(key) {
-            if entry.is_older_than(now) {
+        match self.data.get(key) {
+            Some(entry) if entry.is_older_than(now) => {
                 drop(entry);
                 self.data.remove(key);
-                return None;
+                None
             }
-            return Some(entry.value.clone());
+            Some(entry) => Some(entry.value.clone()),
+            None => None,
         }
-        None
     }
 
     pub fn get(&self, key: &Bytes) -> Option<RedisValue> {
@@ -322,17 +191,19 @@ impl StorageEngine {
             Entry::Occupied(e) => {
                 let mut stored_val = e.into_ref();
                 if stored_val.is_expired() {
-                    todo!();
+                    stored_val.value = RedisValue::Integer(incr);
+                    stored_val.expiry = None;
+                    return Ok(incr);
                 }
                 match stored_val.value.as_integer() {
                     Some(i) => match &stored_val.value {
                         RedisValue::Integer(_) => {
-                            stored_val.value = RedisValue::Integer(i + incr);
-                            Ok(i + incr)
+                            let new_val = i.checked_add(incr).ok_or(IncrError::Overflow)?;
+                            stored_val.value = RedisValue::Integer(new_val);
+                            Ok(new_val)
                         }
-                        RedisValue::String(b) => {
-                            let current = atoi::<i64>(b).ok_or(IncrError::NotAnInteger)?;
-                            let new_val = current + incr;
+                        RedisValue::String(_) => {
+                            let new_val = i.checked_add(incr).ok_or(IncrError::Overflow)?;
                             let mut buffer = itoa::Buffer::new();
                             let printed = buffer.format(new_val);
                             stored_val.value =
