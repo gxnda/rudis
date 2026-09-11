@@ -78,6 +78,7 @@ impl Server {
                                 continue;
                             }
                         };
+                        stream.set_nodelay(true).unwrap();
                         let storage = self.storage.clone();
                         let aof = self.aof.clone();
                         let conn = Connection::new(stream, aof);
