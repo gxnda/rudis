@@ -1,4 +1,5 @@
 use ahash::RandomState;
+use atoi::atoi;
 use bytes::Bytes;
 use coarsetime::{Clock, Duration};
 use dashmap::mapref::entry::Entry;
@@ -324,15 +325,19 @@ impl StorageEngine {
                     todo!();
                 }
                 match stored_val.value.as_integer() {
-                    Some(i) => match stored_val.value {
+                    Some(i) => match &stored_val.value {
                         RedisValue::Integer(_) => {
                             stored_val.value = RedisValue::Integer(i + incr);
                             Ok(i + incr)
                         }
-                        RedisValue::String(_) => {
+                        RedisValue::String(b) => {
+                            let current = atoi::<i64>(b).ok_or(IncrError::NotAnInteger)?;
+                            let new_val = current + incr;
+                            let mut buffer = itoa::Buffer::new();
+                            let printed = buffer.format(new_val);
                             stored_val.value =
-                                RedisValue::String(Bytes::from((i + incr).to_string()));
-                            Ok(i + incr)
+                                RedisValue::String(Bytes::copy_from_slice(printed.as_bytes()));
+                            Ok(new_val)
                         }
                         _ => Err(IncrError::NotAnInteger),
                     },
