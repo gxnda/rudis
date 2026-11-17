@@ -260,7 +260,7 @@ impl StorageEngine {
         Ok(matches)
     }
 
-    fn glob_to_regex(glob: &str) -> String {
+    pub(crate) fn glob_to_regex(glob: &str) -> String {
         let mut regex = String::with_capacity(glob.len() * 2);
         regex.push('^'); // Match from the start
 

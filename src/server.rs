@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::watch;
 
 use crate::storage::persistence::aof::AOF;
 use crate::storage::persistence::errors::PersistenceError;
-use crate::Config;
 use crate::{
     command::{Command, ParseError},
     connection::{Connection, ConnectionError},
     storage::memory::StorageEngine,
 };
+use crate::{config::RuntimeConfig, Config};
 use coarsetime::Updater;
 
 #[derive(Debug, Error)]
@@ -41,7 +41,7 @@ pub struct Server {
     storage: Arc<StorageEngine>,
     shutdown_rx: watch::Receiver<bool>,
     aof: Option<Arc<AOF>>,
-    connection_semaphore: Arc<Semaphore>,
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl Server {
@@ -50,17 +50,18 @@ impl Server {
         storage: Arc<StorageEngine>,
     ) -> Result<(Self, watch::Sender<bool>), PersistenceError> {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let runtime_config = Arc::new(RuntimeConfig::new((*config).clone()));
         Updater::new(100).start()?;
         Ok((
             Server {
-                listener: TcpListener::bind(config.addr).await?,
+                listener: TcpListener::bind(config.socket_addr()).await?,
                 storage,
                 shutdown_rx,
-                connection_semaphore: Arc::new(Semaphore::new(config.max_connections)),
-                aof: match config.aof {
+                aof: match config.appendonly {
                     true => Some(Arc::new(AOF::new(config).await?)),
                     false => None,
                 },
+                runtime_config,
             },
             shutdown_tx,
         ))
@@ -71,9 +72,9 @@ impl Server {
             tokio::select! {
                 conn = self.listener.accept() => match conn {
                     Ok((stream, _)) => {
-                        let permit = match self.connection_semaphore.clone().try_acquire_owned() {
-                            Ok(permit) => permit,
-                            Err(_) => {
+                        let permit = match self.runtime_config.try_acquire() {
+                            Some(permit) => permit,
+                            None => {
                                 eprintln!("Max connections reached, dropping connection");
                                 continue;
                             }
@@ -81,12 +82,15 @@ impl Server {
                         stream.set_nodelay(true).unwrap();
                         let storage = self.storage.clone();
                         let aof = self.aof.clone();
+                        let runtime_config = Arc::clone(&self.runtime_config);
                         let conn = Connection::new(stream, aof);
                         // async move: it moves all variables into tokio, so permit is dropped when
                         // it completes.
                         tokio::spawn(async move {
                             let _permit = permit;
-                            if let Err(e) = Self::handle_connection(conn, storage).await {
+                            if let Err(e) =
+                                Self::handle_connection(conn, storage, runtime_config).await
+                            {
                                 eprintln!("Connection error: {e}");
                             };
                         });
@@ -103,11 +107,16 @@ impl Server {
     async fn handle_connection(
         mut conn: Connection<TcpStream>,
         storage: Arc<StorageEngine>,
+        runtime_config: Arc<RuntimeConfig>,
     ) -> Result<(), ServerError> {
         // all AOF is handled in parse_buffer of Connections TODO: Change that lmao
         while let Some(resp) = conn.read_frame().await? {
             let cmd: Command = Command::from_resp(resp).map_err(ServerError::Parse)?;
-            conn.write_response(cmd.execute(&storage)).await?;
+            let response = match &cmd {
+                Command::Config { .. } => cmd.execute_config(&runtime_config),
+                _ => cmd.execute(&storage),
+            };
+            conn.write_response(response).await?;
         }
         Ok(())
     }

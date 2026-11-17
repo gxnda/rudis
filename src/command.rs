@@ -1,10 +1,15 @@
 use crate::storage::memory::{DataEntry, RedisValue, StorageEngine};
-use crate::{resp::RespValue, storage::memory::IncrError};
+use crate::{
+    config::{ConfigSetError, RuntimeConfig},
+    resp::RespValue,
+    storage::memory::IncrError,
+};
 use std::iter::Iterator;
 
 use atoi::atoi;
 use bytes::Bytes;
 use coarsetime::Clock;
+use regex::Regex;
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -90,6 +95,9 @@ pub enum Command {
     },
     PUnsubscribe {
         patterns: Vec<String>,
+    },
+    Config {
+        args: Vec<Bytes>,
     },
 }
 
@@ -562,6 +570,9 @@ impl Command {
                     })
                 }
             },
+            b if b.eq_ignore_ascii_case(b"CONFIG") => Ok(Command::Config {
+                args: resp_to_vec!(args)?,
+            }),
 
             _ => Err(ParseError::InvalidCommand(
                 String::from_utf8_lossy(&cmd_bytes).to_string(),
@@ -776,6 +787,66 @@ impl Command {
                     )),
                 ])),
             },
+            Command::Config { args } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("CONFIG")))];
+                array.extend(
+                    args.iter()
+                        .cloned()
+                        .map(|arg| RespValue::BulkString(Some(arg))),
+                );
+                RespValue::Array(Some(array))
+            }
+        }
+    }
+
+    pub fn execute_config(&self, runtime_config: &RuntimeConfig) -> RespValue {
+        let Command::Config { args } = self else {
+            return RespValue::Error("ERR not a CONFIG command".into());
+        };
+
+        match args.as_slice() {
+            [subcommand, pattern] if subcommand.eq_ignore_ascii_case(b"GET") => {
+                let pattern = String::from_utf8_lossy(pattern);
+                let regex = match Regex::new(&StorageEngine::glob_to_regex(&pattern)) {
+                    Ok(regex) => regex,
+                    Err(_) => return RespValue::Error("ERR invalid CONFIG GET pattern".into()),
+                };
+                let mut response = Vec::new();
+                for (name, value) in runtime_config.parameters() {
+                    if regex.is_match(&name) {
+                        response.push(RespValue::BulkString(Some(Bytes::from(name))));
+                        response.push(RespValue::BulkString(Some(Bytes::from(value))));
+                    }
+                }
+                RespValue::Array(Some(response))
+            }
+            [subcommand, parameter, value] if subcommand.eq_ignore_ascii_case(b"SET") => {
+                let parameter = String::from_utf8_lossy(parameter);
+                let value = String::from_utf8_lossy(value);
+                match runtime_config.set_parameter(&parameter, &value) {
+                    Ok(()) => RespValue::SimpleString("OK".into()),
+                    Err(ConfigSetError::UnknownParameter(parameter)) => RespValue::Error(
+                        format!("ERR Unknown CONFIG parameter: {parameter}").into(),
+                    ),
+                    Err(ConfigSetError::ReadOnlyParameter(parameter)) => RespValue::Error(
+                        format!("ERR CONFIG parameter '{parameter}' is immutable").into(),
+                    ),
+                    Err(ConfigSetError::InvalidValue { parameter, value }) => RespValue::Error(
+                        format!("ERR Invalid value '{value}' for CONFIG parameter '{parameter}'")
+                            .into(),
+                    ),
+                }
+            }
+            [subcommand, ..] if subcommand.eq_ignore_ascii_case(b"GET") => {
+                RespValue::Error("ERR wrong number of arguments for 'config|get' command".into())
+            }
+            [subcommand, ..] if subcommand.eq_ignore_ascii_case(b"SET") => {
+                RespValue::Error("ERR wrong number of arguments for 'config|set' command".into())
+            }
+            [] => RespValue::Error("ERR wrong number of arguments for 'config' command".into()),
+            _ => RespValue::Error(
+                "ERR Unknown subcommand or wrong number of arguments for 'CONFIG'".into(),
+            ),
         }
     }
 
@@ -1099,6 +1170,9 @@ impl Command {
                 ),
             },
 
+            Command::Config { .. } => {
+                RespValue::Error("ERR CONFIG command requires server context".into())
+            }
             _ => RespValue::Error("ERROR command not implemented yet.".into()),
         }
     }
@@ -1107,8 +1181,10 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::storage::memory::StorageEngine;
     use bytes::Bytes;
+    use std::sync::Arc;
 
     // Helper to create RESP command array
     fn resp_array(args: Vec<&[u8]>) -> RespValue {
@@ -1141,6 +1217,67 @@ mod tests {
             Command::from_resp(resp),
             Err(ParseError::InvalidCommand(_))
         ));
+    }
+
+    #[test]
+    fn test_config_get_set_and_errors() {
+        let runtime_config = RuntimeConfig::new(Config::default());
+
+        let get = Command::from_resp(resp_array(vec![b"CONFIG", b"GET", b"append*"])).unwrap();
+        assert_eq!(
+            get.execute_config(&runtime_config),
+            RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from_static(b"appendonly"))),
+                RespValue::BulkString(Some(Bytes::from_static(b"yes"))),
+                RespValue::BulkString(Some(Bytes::from_static(b"appendfilename"))),
+                RespValue::BulkString(Some(Bytes::from_static(b"appendonly.aof"))),
+            ]))
+        );
+
+        let set =
+            Command::from_resp(resp_array(vec![b"CONFIG", b"SET", b"maxclients", b"12"])).unwrap();
+        assert_eq!(
+            set.execute_config(&runtime_config),
+            RespValue::SimpleString("OK".into())
+        );
+
+        let get = Command::from_resp(resp_array(vec![b"CONFIG", b"GET", b"maxclients"])).unwrap();
+        assert_eq!(
+            get.execute_config(&runtime_config),
+            RespValue::Array(Some(vec![
+                RespValue::BulkString(Some(Bytes::from_static(b"maxclients"))),
+                RespValue::BulkString(Some(Bytes::from_static(b"12"))),
+            ]))
+        );
+
+        for args in [
+            vec![b"CONFIG".as_slice(), b"SET", b"maxclients", b"zero"],
+            vec![b"CONFIG", b"SET", b"port", b"6380"],
+            vec![b"CONFIG", b"SET", b"unknown", b"value"],
+            vec![b"CONFIG", b"GET"],
+        ] {
+            let command = Command::from_resp(resp_array(args)).unwrap();
+            assert!(command.execute_config(&runtime_config).is_err());
+        }
+    }
+
+    #[test]
+    fn test_config_connection_limit_changes_live() {
+        let runtime_config = Arc::new(RuntimeConfig::new(Config {
+            maxclients: 1,
+            ..Config::default()
+        }));
+        let permit = runtime_config.try_acquire().unwrap();
+        assert!(runtime_config.try_acquire().is_none());
+
+        let set =
+            Command::from_resp(resp_array(vec![b"CONFIG", b"SET", b"maxclients", b"2"])).unwrap();
+        assert_eq!(
+            set.execute_config(&runtime_config),
+            RespValue::SimpleString("OK".into())
+        );
+        assert!(runtime_config.try_acquire().is_some());
+        drop(permit);
     }
 
     #[test]

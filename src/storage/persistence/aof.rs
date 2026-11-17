@@ -25,7 +25,7 @@ impl AOF {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&config.aof_path)
+            .open(config.aof_path())
             .await?;
         Ok(AOF {
             config,
@@ -37,7 +37,7 @@ impl AOF {
 
     pub fn ensure_reader(&mut self) -> Result<(), PersistenceError> {
         if self.reader.is_none() {
-            let file = File::open(&self.config.aof_path)?;
+            let file = File::open(self.config.aof_path())?;
             self.reader = Some(BufReader::new(file));
         }
         Ok(())
@@ -66,7 +66,7 @@ impl AOF {
                 OpenOptions::new()
                     .write(true)
                     .append(true)
-                    .open(&self.config.aof_path)
+                    .open(self.config.aof_path())
                     .await?,
             );
         }
@@ -129,7 +129,9 @@ impl AOF {
                 Some(resp) => {
                     // apply to storage
                     let command: Command = Command::from_resp(resp)?;
-                    let _resp = command.execute(&storage);
+                    if !matches!(command, Command::Config { .. }) {
+                        let _resp = command.execute(&storage);
+                    }
                 }
                 None => {
                     // EOF
