@@ -1,6 +1,28 @@
 # Rudis
 This is a lightweight Redis clone written in Rust.
 
+## Running
+
+Start the server with Redis-style command-line options:
+
+```sh
+cargo run --bin rudisd -- --port 6379 --bind 127.0.0.1 \
+  --dir . --dbfilename dump.rdb --appendonly yes \
+  --appendfilename appendonly.aof --maxclients 100000
+```
+
+`--appendonly` accepts `yes` or `no`. The default bind address, port, persistence
+filenames, append-only setting, and client limit match the previous defaults.
+Rudis also supports the server-specific `--storage-init-size` option.
+
+## CONFIG
+
+`CONFIG GET pattern` returns name/value pairs for supported settings and accepts
+Redis-style `*` and `?` wildcards. `CONFIG SET maxclients value` changes the
+live connection limit. The other reported settings are startup-only and return
+an error if changed with `CONFIG SET`; unknown settings and invalid values also
+return errors.
+
 # TODO
 - [ ] Implement more commands
 

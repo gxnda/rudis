@@ -99,6 +99,9 @@ pub enum Command {
     Config {
         args: Vec<Bytes>,
     },
+    Command {
+        args: Vec<Bytes>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -573,6 +576,9 @@ impl Command {
             b if b.eq_ignore_ascii_case(b"CONFIG") => Ok(Command::Config {
                 args: resp_to_vec!(args)?,
             }),
+            b if b.eq_ignore_ascii_case(b"COMMAND") => Ok(Command::Command {
+                args: resp_to_vec!(args)?,
+            }),
 
             _ => Err(ParseError::InvalidCommand(
                 String::from_utf8_lossy(&cmd_bytes).to_string(),
@@ -796,6 +802,15 @@ impl Command {
                 );
                 RespValue::Array(Some(array))
             }
+            Command::Command { args } => {
+                let mut array = vec![RespValue::BulkString(Some(Bytes::from("COMMAND")))];
+                array.extend(
+                    args.iter()
+                        .cloned()
+                        .map(|arg| RespValue::BulkString(Some(arg))),
+                );
+                RespValue::Array(Some(array))
+            }
         }
     }
 
@@ -852,6 +867,7 @@ impl Command {
 
     pub fn execute(&self, storage: &StorageEngine) -> RespValue {
         match self {
+            Command::Command { args } => execute_command(args),
             Command::Invalid { message: _ } => {
                 RespValue::Error(Bytes::from_static(b"Invalid message: "))
             }
@@ -1178,6 +1194,83 @@ impl Command {
     }
 }
 
+type CommandMetadata = (&'static str, i64, &'static [&'static str], i64, i64, i64);
+
+const COMMAND_METADATA: &[CommandMetadata] = &[
+    ("command", -1, &["admin"], 0, 0, 0),
+    ("config", -3, &["admin"], 0, 0, 0),
+    ("decr", 2, &["write", "fast"], 1, 1, 1),
+    ("del", -2, &["write"], 1, -1, 1),
+    ("echo", 2, &["fast"], 0, 0, 0),
+    ("exists", -2, &["readonly", "fast"], 1, -1, 1),
+    ("expire", 3, &["write"], 1, 1, 1),
+    ("flushall", -1, &["write", "admin"], 0, 0, 0),
+    ("get", 2, &["readonly", "fast"], 1, 1, 1),
+    ("incr", 2, &["write", "fast"], 1, 1, 1),
+    ("keys", 2, &["readonly"], 0, 0, 0),
+    ("llen", 2, &["readonly", "fast"], 1, 1, 1),
+    ("lpop", -2, &["write"], 1, 1, 1),
+    ("lpush", -3, &["write"], 1, 1, 1),
+    ("persist", 2, &["write"], 1, 1, 1),
+    ("ping", -1, &["fast"], 0, 0, 0),
+    ("rpop", -2, &["write"], 1, 1, 1),
+    ("rpush", -3, &["write"], 1, 1, 1),
+    ("set", -3, &["write"], 1, 1, 1),
+    ("ttl", 2, &["readonly", "fast"], 1, 1, 1),
+];
+
+fn command_metadata_response(metadata: &CommandMetadata) -> RespValue {
+    let (name, arity, flags, first_key, last_key, key_step) = metadata;
+    RespValue::Array(Some(vec![
+        RespValue::BulkString(Some(Bytes::from(*name))),
+        RespValue::Integer(*arity),
+        RespValue::Array(Some(
+            flags
+                .iter()
+                .map(|flag| RespValue::BulkString(Some(Bytes::from(*flag))))
+                .collect(),
+        )),
+        RespValue::Integer(*first_key),
+        RespValue::Integer(*last_key),
+        RespValue::Integer(*key_step),
+    ]))
+}
+
+fn execute_command(args: &[Bytes]) -> RespValue {
+    match args {
+        [] => RespValue::Array(Some(
+            COMMAND_METADATA
+                .iter()
+                .map(command_metadata_response)
+                .collect(),
+        )),
+        [subcommand] if subcommand.eq_ignore_ascii_case(b"COUNT") => {
+            RespValue::Integer(COMMAND_METADATA.len() as i64)
+        }
+        [subcommand, names @ ..]
+            if subcommand.eq_ignore_ascii_case(b"INFO") && !names.is_empty() =>
+        {
+            RespValue::Array(Some(
+                names
+                    .iter()
+                    .map(|name| {
+                        COMMAND_METADATA
+                            .iter()
+                            .find(|metadata| name.eq_ignore_ascii_case(metadata.0.as_bytes()))
+                            .map(command_metadata_response)
+                            .unwrap_or(RespValue::BulkString(None))
+                    })
+                    .collect(),
+            ))
+        }
+        [subcommand, ..] if subcommand.eq_ignore_ascii_case(b"INFO") => {
+            RespValue::Error("ERR wrong number of arguments for 'command|info' command".into())
+        }
+        [_] => RespValue::Error("ERR Unknown subcommand for COMMAND".into()),
+        _ => RespValue::Error("ERR wrong number of arguments for COMMAND".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1278,6 +1371,45 @@ mod tests {
         );
         assert!(runtime_config.try_acquire().is_some());
         drop(permit);
+    }
+
+    #[test]
+    fn test_command_table_probe() {
+        let storage = StorageEngine::with_capacity(1);
+        let command = Command::from_resp(resp_array(vec![b"COMMAND"])).unwrap();
+        let response = command.execute(&storage);
+        let RespValue::Array(Some(commands)) = response else {
+            panic!("COMMAND should return command metadata");
+        };
+        assert_eq!(commands.len(), COMMAND_METADATA.len());
+        assert!(commands.iter().any(|command| {
+            matches!(
+                command,
+                RespValue::Array(Some(info))
+                    if info.first() == Some(&RespValue::BulkString(Some(Bytes::from_static(b"command"))))
+            )
+        }));
+
+        let count = Command::from_resp(resp_array(vec![b"COMMAND", b"COUNT"])).unwrap();
+        assert_eq!(
+            count.execute(&storage),
+            RespValue::Integer(COMMAND_METADATA.len() as i64)
+        );
+
+        let info = Command::from_resp(resp_array(vec![
+            b"COMMAND",
+            b"INFO",
+            b"GET",
+            b"not-a-command",
+        ]))
+        .unwrap();
+        assert_eq!(
+            info.execute(&storage),
+            RespValue::Array(Some(vec![
+                command_metadata_response(&COMMAND_METADATA[8]),
+                RespValue::BulkString(None),
+            ]))
+        );
     }
 
     #[test]
